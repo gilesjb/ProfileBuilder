@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Profile Builder</title>
+<!--
+  Profile Builder frontend. Open this file directly from disk (file://).
+
+  It is deliberately one self-contained file: browsers won't load local
+  modules from file://, so all code and styles are inline. React and htm come
+  from a CDN at pinned versions; there is no build step.
+
+  The profile service's HTML is this app's data model. The contract parser
+  below is the only code that knows that markup (see backend/html.js).
+-->
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@19.1.0",
+    "react-dom/client": "https://esm.sh/react-dom@19.1.0/client",
+    "htm": "https://esm.sh/htm@3.1.1"
+  }
+}
+</script>
+<style>
+  :root {
+    --bg: #f6f5f2;
+    --surface: #ffffff;
+    --surface-muted: #f1efeb;
+    --border: #e6e2db;
+    --text: #1d1c1a;
+    --text-muted: #6f6a62;
+    --text-faint: #a29c92;
+    --accent: #2f6f62;
+    --accent-soft: #e3efeb;
+    --warn: #a4640f;
+    --warn-soft: #fbf1e1;
+    --warn-border: #efd6ad;
+    --danger: #a63d32;
+    --danger-soft: #fbeae7;
+    --radius-lg: 18px;
+    --radius-md: 12px;
+    --shadow: 0 1px 2px rgb(29 28 26 / 0.04), 0 8px 24px rgb(29 28 26 / 0.06);
+    --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", system-ui, sans-serif;
+    color-scheme: light dark;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413;
+      --surface: #1c1c1a;
+      --surface-muted: #252523;
+      --border: #2f2e2b;
+      --text: #f0eee9;
+      --text-muted: #a8a399;
+      --text-faint: #6f6a62;
+      --accent: #7cc4b2;
+      --accent-soft: #1f322d;
+      --warn: #e7b465;
+      --warn-soft: #2c2417;
+      --warn-border: #4a3a20;
+      --danger: #ef8d80;
+      --danger-soft: #331d1a;
+      --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.25);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button { font: inherit; color: inherit; }
+
+  .app {
+    min-height: 100vh;
+    display: grid;
+    grid-template-rows: auto 1fr;
+  }
+
+  /* --- Header ----------------------------------------------------------- */
+
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 18px 32px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .brand-mark {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #d9a441));
+    display: grid;
+    place-items: center;
+    color: white;
+  }
+
+  .brand-name { font-weight: 650; letter-spacing: -0.01em; }
+  .brand-tagline { color: var(--text-muted); font-size: 13px; }
+
+  /* --- Layout ----------------------------------------------------------- */
+
+  .workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 400px;
+    gap: 24px;
+    padding: 24px 32px 32px;
+    align-items: start;
+  }
+
+  @media (max-width: 900px) {
+    .workspace { grid-template-columns: 1fr; padding: 16px; }
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow);
+  }
+
+  /* --- Chat placeholder ------------------------------------------------- */
+
+  .chat-placeholder {
+    min-height: calc(100vh - 130px);
+    display: grid;
+    place-items: center;
+    text-align: center;
+    padding: 48px;
+  }
+
+  .chat-placeholder h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  .chat-placeholder p { margin: 0 auto; max-width: 36ch; color: var(--text-muted); }
+
+  /* --- Profile panel ---------------------------------------------------- */
+
+  .panel {
+    position: sticky;
+    top: 24px;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 22px 24px 18px;
+  }
+
+  .panel-title { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+  .panel-subtitle { margin: 2px 0 0; color: var(--text-muted); font-size: 13px; }
+
+  .icon-button {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 120ms, color 120ms;
+  }
+  .icon-button:hover { background: var(--surface-muted); color: var(--text); }
+  .icon-button:disabled { cursor: default; opacity: 0.6; }
+  .icon-button.spinning svg { animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .progress { padding: 0 24px 18px; }
+  .progress-track { height: 6px; border-radius: 99px; background: var(--surface-muted); overflow: hidden; }
+  .progress-fill { height: 100%; border-radius: 99px; background: var(--accent); transition: width 300ms ease; }
+  .progress-label { margin-top: 8px; font-size: 12px; color: var(--text-muted); }
+
+  .fields { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
+
+  .field {
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+  }
+  .field:last-child { border-bottom: none; }
+
+  .field-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .field-flag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 1px 8px;
+    border-radius: 99px;
+    background: var(--warn-soft);
+    color: var(--warn);
+    font-size: 11px;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .field-flag::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+
+  .chip {
+    padding: 3px 11px;
+    border-radius: 99px;
+    background: var(--accent-soft);
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  .field-empty { color: var(--text-faint); font-size: 14px; }
+
+  /* --- Conflicts -------------------------------------------------------- */
+
+  .conflicts {
+    margin: 0 16px 16px;
+    padding: 14px 16px;
+    border: 1px solid var(--warn-border);
+    border-radius: var(--radius-md);
+    background: var(--warn-soft);
+  }
+
+  .conflicts-title {
+    margin: 0 0 2px;
+    font-size: 14px;
+    font-weight: 650;
+    color: var(--warn);
+  }
+  .conflicts-hint { margin: 0 0 10px; font-size: 13px; color: var(--text-muted); }
+
+  .conflict { padding: 10px 0 0; border-top: 1px solid var(--warn-border); }
+  .conflict + .conflict { margin-top: 10px; }
+  .conflict-field { font-size: 13px; font-weight: 600; }
+
+  .conflict-compare {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 2px 10px;
+    margin: 4px 0 0;
+    font-size: 13px;
+  }
+  .conflict-compare dt { color: var(--text-muted); }
+  .conflict-compare dd { margin: 0; }
+
+  /* --- States ----------------------------------------------------------- */
+
+  .notice {
+    margin: 0 16px 16px;
+    padding: 12px 14px;
+    border-radius: var(--radius-md);
+    background: var(--danger-soft);
+    color: var(--danger);
+    font-size: 13px;
+  }
+  .notice strong { display: block; margin-bottom: 2px; }
+  .notice code {
+    padding: 1px 5px;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    font-size: 12px;
+  }
+  .notice button {
+    margin-top: 8px;
+    padding: 5px 12px;
+    border: 1px solid currentColor;
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .skeleton { padding: 4px 24px 24px; }
+  .skeleton-row {
+    height: 14px;
+    margin: 18px 0;
+    border-radius: 6px;
+    background: linear-gradient(90deg, var(--surface-muted), var(--border), var(--surface-muted));
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
+  }
+  .skeleton-row:nth-child(odd) { width: 70%; }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="module">
+import { createElement, useCallback, useEffect, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import htm from 'htm';
+
+const html = htm.bind(createElement);
+
+// --- Config -----------------------------------------------------------------
+
+const BACKEND_URL = 'http://localhost:3000';
+
+// --- Contract parser --------------------------------------------------------
+// Turns the profile service's HTML into a validated model. This is the only
+// code that knows the markup; anything unexpected throws a ContractError
+// rather than rendering partial data.
+
+class ContractError extends Error {}
+
+/**
+ * @typedef {{ name: string, label: string, kind: 'list' | 'single', values: string[] }} Field
+ * @typedef {{ id: string, field: string, existing: string[], newInformation: string,
+ *             proposed: { op: string, value: string } | null }} Conflict
+ * @typedef {{ outcome: string, message: string }} Result
+ * @typedef {{ fields: Field[], conflicts: Conflict[], result: Result | null }} ProfileModel
+ */
+
+/** @param {string} text @returns {ProfileModel} */
+function parseProfilePage(text) {
+  const main = new DOMParser().parseFromString(text, 'text/html').querySelector('main');
+  if (!main) throw new ContractError('response has no <main> element');
+
+  const profile = main.querySelector('section#profile');
+  if (!profile) throw new ContractError('response has no #profile section');
+  const fields = [...profile.querySelectorAll('dd[data-field]')].map(parseField);
+  if (fields.length === 0) throw new ContractError('#profile has no fields');
+
+  const conflictsSection = main.querySelector('section#conflicts');
+  if (!conflictsSection) throw new ContractError('response has no #conflicts section');
+  const conflicts = [...conflictsSection.querySelectorAll('article[data-conflict]')].map(parseConflict);
+
+  return { fields, conflicts, result: parseResult(main) };
+}
+
+/** @param {Element} dd @returns {Field} */
+function parseField(dd) {
+  const name = dd.getAttribute('data-field');
+  const kind = dd.getAttribute('data-kind');
+  if (!name) throw new ContractError('field without a name');
+  if (kind !== 'list' && kind !== 'single') throw new ContractError(`field ${name} has unknown kind "${kind}"`);
+
+  const dt = dd.previousElementSibling;
+  const label = dt?.tagName === 'DT' ? dt.textContent.trim() : name;
+
+  const isEmpty = dd.hasAttribute('data-empty');
+  const values = isEmpty ? [] : [...dd.querySelectorAll('data[value]')].map((d) => d.getAttribute('value'));
+  if (!isEmpty && values.length === 0) throw new ContractError(`field ${name} is neither empty nor has values`);
+  if (kind === 'single' && values.length > 1) throw new ContractError(`single field ${name} has several values`);
+
+  return { name, label, kind, values };
+}
+
+/** @param {Element} article @returns {Conflict} */
+function parseConflict(article) {
+  const id = article.getAttribute('data-conflict');
+  const field = article.getAttribute('data-field');
+  if (!id || !field) throw new ContractError('conflict without an id or field');
+
+  const newInformation = article.querySelector('[data-role="new-information"]')?.textContent.trim();
+  if (!newInformation) throw new ContractError(`conflict ${id} has no new information`);
+
+  const existing = [...article.querySelectorAll('[data-role="existing"]')].map((d) => d.getAttribute('value'));
+  const proposedEl = article.querySelector('[data-role="proposed"]');
+  const proposed = proposedEl
+    ? { op: proposedEl.getAttribute('data-op'), value: proposedEl.getAttribute('data-value') }
+    : null;
+
+  return { id, field, existing, newInformation, proposed };
+}
+
+/** @param {Element} main @returns {Result | null} */
+function parseResult(main) {
+  const section = main.querySelector('section#result');
+  if (!section) return null;
+  return {
+    outcome: section.getAttribute('data-outcome') ?? 'unknown',
+    message: section.querySelector('p')?.textContent.trim() ?? '',
+  };
+}
+
+// --- Backend client ---------------------------------------------------------
+
+class BackendUnreachableError extends Error {}
+
+/** @returns {Promise<ProfileModel>} */
+async function fetchProfile() {
+  let response;
+  try {
+    response = await fetch(`${BACKEND_URL}/profile`, { cache: 'no-store' });
+  } catch {
+    throw new BackendUnreachableError(`Can't reach the profile service at ${BACKEND_URL}.`);
+  }
+  if (!response.ok) throw new ContractError(`GET /profile returned HTTP ${response.status}`);
+  return parseProfilePage(await response.text());
+}
+
+// --- State ------------------------------------------------------------------
+
+/**
+ * Loads the profile on mount and whenever the window regains focus. A failed
+ * refresh keeps the last good model and reports the error alongside it.
+ */
+function useProfile() {
+  const [model, setModel] = useState(/** @type {ProfileModel | null} */ (null));
+  const [error, setError] = useState(/** @type {Error | null} */ (null));
+  const [loading, setLoading] = useState(true);
+  const [loadedAt, setLoadedAt] = useState(/** @type {Date | null} */ (null));
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      setModel(await fetchProfile());
+      setError(null);
+      setLoadedAt(new Date());
+    } catch (e) {
+      setError(e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [refresh]);
+
+  return { model, error, loading, loadedAt, refresh };
+}
+
+// --- Components -------------------------------------------------------------
+
+function App() {
+  const profile = useProfile();
+  return html`
+    <div className="app">
+      <${Header} />
+      <div className="workspace">
+        <${ChatPlaceholder} />
+        <${ProfilePanel} ...${profile} />
+      </div>
+    </div>
+  `;
+}
+
+function Header() {
+  return html`
+    <header className="header">
+      <div className="brand-mark" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="9" />
+          <path d="m15.5 8.5-2 5-5 2 2-5z" />
+        </svg>
+      </div>
+      <div>
+        <div className="brand-name">Profile Builder</div>
+        <div className="brand-tagline">Your travel preferences, built through conversation</div>
+      </div>
+    </header>
+  `;
+}
+
+function ChatPlaceholder() {
+  return html`
+    <section className="card chat-placeholder" aria-label="Chat">
+      <div>
+        <h2>Chat is coming next</h2>
+        <p>You'll talk to the assistant here, and your profile will fill in on the right as you go.</p>
+      </div>
+    </section>
+  `;
+}
+
+function ProfilePanel({ model, error, loading, loadedAt, refresh }) {
+  return html`
+    <aside className="card panel" aria-label="Travel profile">
+      <div className="panel-header">
+        <div>
+          <h2 className="panel-title">Travel profile</h2>
+          <p className="panel-subtitle">${loadedAt ? `Updated ${formatTime(loadedAt)}` : error ? 'Not loaded' : 'Loading…'}</p>
+        </div>
+        <button
+          className=${`icon-button${loading ? ' spinning' : ''}`}
+          onClick=${refresh}
+          disabled=${loading}
+          aria-label="Refresh profile"
+          title="Refresh"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
+            <path d="M21 3v5h-5" />
+          </svg>
+        </button>
+      </div>
+
+      ${error && html`<${ErrorNotice} error=${error} hasModel=${Boolean(model)} onRetry=${refresh} />`}
+      ${!model && !error && html`<${Skeleton} />`}
+      ${model && html`<${ProfileContents} model=${model} />`}
+    </aside>
+  `;
+}
+
+function ProfileContents({ model }) {
+  const filled = model.fields.filter((f) => f.values.length > 0).length;
+  const conflictedFields = new Set(model.conflicts.map((c) => c.field));
+  const labelOf = (name) => model.fields.find((f) => f.name === name)?.label ?? name;
+
+  return html`
+    <div className="progress">
+      <div className="progress-track">
+        <div className="progress-fill" style=${{ width: `${(filled / model.fields.length) * 100}%` }} />
+      </div>
+      <div className="progress-label">${filled} of ${model.fields.length} preferences shared</div>
+    </div>
+
+    ${model.conflicts.length > 0 && html`<${ConflictList} conflicts=${model.conflicts} labelOf=${labelOf} />`}
+
+    <ul className="fields">
+      ${model.fields.map(
+        (field) => html`<${FieldRow} key=${field.name} field=${field} conflicted=${conflictedFields.has(field.name)} />`,
+      )}
+    </ul>
+  `;
+}
+
+function FieldRow({ field, conflicted }) {
+  return html`
+    <li className="field">
+      <div className="field-label">
+        ${field.label}
+        ${conflicted && html`<span className="field-flag">Needs clarification</span>`}
+      </div>
+      ${field.values.length === 0
+        ? html`<div className="field-empty">Not shared yet</div>`
+        : html`<ul className="chips">${field.values.map((v) => html`<li key=${v} className="chip">${v}</li>`)}</ul>`}
+    </li>
+  `;
+}
+
+function ConflictList({ conflicts, labelOf }) {
+  return html`
+    <section className="conflicts" aria-label="Open conflicts">
+      <h3 className="conflicts-title">
+        ${conflicts.length === 1 ? 'One thing needs clarifying' : `${conflicts.length} things need clarifying`}
+      </h3>
+      <p className="conflicts-hint">Nothing has been overwritten. Clarify in the chat to resolve.</p>
+      ${conflicts.map(
+        (c) => html`
+          <div key=${c.id} className="conflict">
+            <div className="conflict-field">${labelOf(c.field)}</div>
+            <dl className="conflict-compare">
+              <dt>Profile says</dt>
+              <dd>${c.existing.length ? c.existing.join(', ') : 'nothing yet'}</dd>
+              <dt>New</dt>
+              <dd>${c.newInformation}</dd>
+            </dl>
+          </div>
+        `,
+      )}
+    </section>
+  `;
+}
+
+function ErrorNotice({ error, hasModel, onRetry }) {
+  const title =
+    error instanceof BackendUnreachableError
+      ? error.message
+      : error instanceof ContractError
+        ? 'The profile service sent something unexpected.'
+        : 'Something went wrong loading the profile.';
+  return html`
+    <div className="notice" role="alert">
+      <strong>${title}</strong>
+      ${error instanceof BackendUnreachableError
+        ? html`Start it with <code>npm start</code> in the project folder.`
+        : error.message}
+      ${hasModel && html`<div>Showing the last profile that loaded.</div>`}
+      <div><button onClick=${onRetry}>Try again</button></div>
+    </div>
+  `;
+}
+
+function Skeleton() {
+  return html`
+    <div className="skeleton" aria-hidden="true">
+      ${[0, 1, 2, 3, 4, 5].map((i) => html`<div key=${i} className="skeleton-row" />`)}
+    </div>
+  `;
+}
+
+/** @param {Date} date */
+function formatTime(date) {
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+createRoot(document.getElementById('root')).render(html`<${App} />`);
+</script>
+</body>
+</html>
