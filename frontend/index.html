@@ -290,6 +290,8 @@
   .tool-call.error .tool-result { background: var(--danger-soft); color: var(--danger); }
   .tool-call.running .tool-result { animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: 0.45; } }
+  .tool-call.leaving { animation: fade-out 300ms ease forwards; }
+  @keyframes fade-out { to { opacity: 0; transform: translateY(-2px); } }
 
 
   .message-error {
@@ -521,6 +523,8 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_MODEL = 'anthropic/claude-haiku-5.5';
 const STORAGE_KEYS = { apiKey: 'profileBuilder.openRouterKey', model: 'profileBuilder.model' };
 const MAX_TOOL_ROUNDS = 8;
+/** How long tool call rows take to fade out once the reply is ready. */
+const TOOL_CALL_FADE_MS = 300;
 /** Marks requests made by the agent's tools, so the backend can apply agent policy. */
 const AGENT_HEADER = { name: 'X-Client', value: 'agent' };
 
@@ -1215,7 +1219,8 @@ function Message({ message, isLast, onRetry, onOpenSettings }) {
   return html`
     <div className="message assistant">
       ${parts.map((part, i) => {
-        if (part.type === 'tool') return html`<${ToolCall} key=${part.id} call=${part} />`;
+        // Tool rows go once the reply is complete; after an error or Stop they stay as a record.
+        if (part.type === 'tool') return html`<${ToolCall} key=${part.id} call=${part} dismissed=${status === 'done'} />`;
         if (part.type === 'note') return html`<div key=${i} className="message-note">${part.text}</div>`;
         const caret = streaming && part === last;
         return html`<div key=${i} className=${`bubble${caret ? ' caret' : ''}`}>${part.text}</div>`;
@@ -1234,12 +1239,24 @@ function Message({ message, isLast, onRetry, onOpenSettings }) {
   `;
 }
 
-/** One tool call, shown as the request it made and what came back. */
-function ToolCall({ call }) {
+/**
+ * One tool call, shown as the request it made and what came back. Rows stay
+ * visible while the agent works and fade away once its reply is ready
+ * (`dismissed`); the full record stays in the console log.
+ */
+function ToolCall({ call, dismissed }) {
+  const [gone, setGone] = useState(false);
+  useEffect(() => {
+    if (!dismissed) return;
+    const timer = setTimeout(() => setGone(true), TOOL_CALL_FADE_MS);
+    return () => clearTimeout(timer);
+  }, [dismissed]);
+  if (gone) return null;
+
   const tone = call.running ? 'running' : call.error ? 'error' : toneOf(call.status, call.outcome);
   const result = call.running ? 'running…' : call.error ? 'error' : [call.status, call.outcome].filter(Boolean).join(' ');
   return html`
-    <div className=${`tool-call ${tone}`} title=${call.error ?? ''}>
+    <div className=${`tool-call ${tone}${dismissed ? ' leaving' : ''}`} title=${call.error ?? ''}>
       <span className="tool-name">${call.name}</span>
       ${call.path && html`<span className="tool-target">${call.method} ${call.path}</span>`}
       ${call.fields && html`<span className="tool-fields">${formatFields(call.fields)}</span>`}
