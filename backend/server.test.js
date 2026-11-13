@@ -1,0 +1,110 @@
+// @ts-check
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { after, before, describe, it } from 'node:test';
+import { createApp } from './server.js';
+import { createMemoryStore } from './store.js';
+
+/** @type {import('node:http').Server} */
+let server;
+let base = '';
+
+before(async () => {
+  const handle = await createApp({ store: createMemoryStore(), log: () => {} });
+  server = createServer(handle);
+  await new Promise((resolve) => server.listen(0, () => resolve(undefined)));
+  const address = /** @type {import('node:net').AddressInfo} */ (server.address());
+  base = `http://localhost:${address.port}`;
+});
+
+after(() => server.close());
+
+/** @param {string} path @param {Record<string, string>} fields */
+function post(path, fields) {
+  return fetch(base + path, { method: 'POST', body: new URLSearchParams(fields) });
+}
+
+/** @param {string} html */
+function outcomeOf(html) {
+  return html.match(/<section id="result" data-outcome="([^"]+)"/)?.[1];
+}
+
+describe('profile service over HTTP', () => {
+  it('serves the profile with CORS headers for file:// pages', async () => {
+    const res = await fetch(`${base}/profile`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('access-control-allow-origin'), '*');
+    assert.match(res.headers.get('content-type') ?? '', /text\/html/);
+    assert.match(await res.text(), /<section id="profile">/);
+  });
+
+  it('applies a change, then answers a contradicting change with 409 and keeps the value', async () => {
+    const set = await post('/profile', { field: 'homeBase', op: 'set', value: 'Boston', evidence: 'I live in Boston' });
+    assert.equal(set.status, 200);
+    assert.equal(outcomeOf(await set.text()), 'applied');
+
+    const contradict = await post('/profile', { field: 'homeBase', op: 'set', value: 'Chicago', evidence: 'from Chicago' });
+    assert.equal(contradict.status, 409);
+    const html = await contradict.text();
+    assert.equal(outcomeOf(html), 'conflict');
+    assert.match(html, /<dd data-field="homeBase" data-kind="single"><ul>\n<li><data value="Boston">/);
+    assert.match(html, /<article id="conflict-c1" data-conflict="c1" data-field="homeBase">/);
+
+    const resolve = await post('/profile/conflicts/c1', { resolution: 'accept' });
+    assert.equal(resolve.status, 200);
+    assert.match(await resolve.text(), /<data value="Chicago">/);
+  });
+
+  it('rejects invalid input with 422 and lists the errors', async () => {
+    const res = await post('/profile', { field: 'budget', op: 'add', value: 'cheap' });
+    assert.equal(res.status, 422);
+    const html = await res.text();
+    assert.equal(outcomeOf(html), 'invalid');
+    assert.match(html, /field must be one of/);
+  });
+
+  it('rejects non-form bodies with 415', async () => {
+    const res = await fetch(`${base}/profile`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(res.status, 415);
+  });
+
+  it('returns 201 for a reported conflict and 404 for an unknown one', async () => {
+    await post('/profile', { field: 'dietaryRestrictions', op: 'add', value: 'vegetarian', evidence: "I'm vegetarian" });
+    const report = await post('/profile/conflicts', {
+      field: 'dietaryRestrictions',
+      newInformation: 'wants a steakhouse',
+      evidence: 'a great steakhouse',
+    });
+    assert.equal(report.status, 201);
+    assert.equal((await post('/profile/conflicts/c99', { resolution: 'keep' })).status, 404);
+  });
+
+  it('looks up destinations: 200 when known, 404 with a plain statement when not', async () => {
+    const found = await fetch(`${base}/destinations?name=kyoto`);
+    assert.equal(found.status, 200);
+    assert.match(await found.text(), /<article id="destination" data-name="Kyoto">/);
+
+    const missing = await fetch(`${base}/destinations?name=Ulaanbaatar`);
+    assert.equal(missing.status, 404);
+    assert.match(await missing.text(), /No information available for &quot;Ulaanbaatar&quot;/);
+  });
+
+  it('answers unknown routes with 404 and wrong methods with 405', async () => {
+    assert.equal((await fetch(`${base}/nope`)).status, 404);
+    const res = await fetch(`${base}/profile`, { method: 'DELETE' });
+    assert.equal(res.status, 405);
+    assert.equal(res.headers.get('allow'), 'GET, POST');
+  });
+
+  it('reset clears the profile and conflicts', async () => {
+    const res = await post('/profile/reset', {});
+    assert.equal(res.status, 200);
+    const html = await res.text();
+    assert.match(html, /No open conflicts/);
+    assert.doesNotMatch(html, /<data value=/);
+  });
+});
