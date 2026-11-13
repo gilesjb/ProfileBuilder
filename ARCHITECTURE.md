@@ -36,7 +36,7 @@ When the LLM calls a tool, the frontend makes one request and gives the response
 | Constraint | Consequence |
 |---|---|
 | No build step, minimal dependencies | The backend is plain JavaScript (ES modules) run with `node backend/server.js` on Node ≥ 22, with **zero npm dependencies**: `node:http`, `node:fs`, `node:test`. The frontend loads React and [`htm`](https://github.com/developit/htm) from a CDN at pinned versions, so templates need no compile step. |
-| Frontend is opened from `file://` | Its origin is `null`, so the backend sends `Access-Control-Allow-Origin: *`. Writes are form-encoded POSTs with no custom headers, which are "simple" requests and need no CORS preflight. |
+| Frontend is opened from `file://` | Its origin is `null`, so the backend sends `Access-Control-Allow-Origin: *`. Browser form posts are "simple" requests and need no preflight. The agent's requests carry `X-Client: agent`, so the browser preflights them; the backend allows that header and lets the browser cache the answer for 10 minutes. |
 | `file://` can't load local modules | The frontend is **one self-contained file** with inline `<script type="module">` and `<style>`. Imports from `https://` CDNs still work. |
 | No code is shared between the two sides | The typed contract is the **HTML structure itself** (§4). The backend defines it as data in `contract.js` and renders it in `html.js`, and the frontend validates what it parses. |
 | Plain JS, no compiler | The contract is enforced by runtime validation at every boundary (form input, stored data, and on the frontend, LLM tool arguments and parsed HTML). JSDoc typedefs on the core types plus `// @ts-check` let an editor type-check the code; nothing checks them at runtime. |
@@ -84,11 +84,13 @@ Each stored value records the user's words that justified it (`evidence`) and wh
 | `POST /profile` | Apply one change: `field`, `op` (`add`, `remove` or `set`), `value`, `evidence` | 200 applied · 409 conflict recorded · 422 invalid |
 | `POST /profile/conflicts` | Report a semantic contradiction: `field`, `newInformation`, `evidence` | 201 · 422 |
 | `POST /profile/conflicts/{id}` | Resolve a conflict: `resolution` (`keep`, `accept` or `replace`); `value` (repeatable, or one per line) for `replace`; optional `evidence` | 200 · 404 · 422 |
-| `POST /profile/reset` | Clear the profile and conflicts (for testing and demos) | 200 |
+| `POST /profile/reset` | Clear the profile and conflicts (for testing and demos). Refused for the agent. | 200 · 403 agent |
 | `GET /destinations` | List the known destinations, with a lookup form | 200 |
 | `GET /destinations?name=…` | `getDestinationInfo(name)`. Matching ignores case, accents and extra whitespace, and accepts a few aliases (e.g. Lisboa, CDMX). | 200 found · 404 not found · 422 empty name |
 
 Every write responds with the updated profile page plus a **result section** saying what happened. A caller always gets the current state back and never needs a second `GET`.
+
+**Agent requests.** Requests from the agent's tools carry `X-Client: agent`. The frontend's tool code sets the header, so the model can't leave it off. The backend applies agent policy in one place: the agent may not reset the profile (403), and pages served to it omit the reset form. The header is a declaration by a cooperating client, not authentication. `User-Agent` was considered and rejected, because Chrome silently ignores attempts to set it from `fetch`.
 
 For list fields `op` is `add` or `remove`; for single-value fields it is `set` or `remove`. Writes must be `application/x-www-form-urlencoded` (anything else gets a 415, and bodies over 16 KB get a 413). Unknown paths get a 404 and wrong methods a 405, each with an HTML error page.
 

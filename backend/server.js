@@ -10,6 +10,8 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
+  AGENT_CLIENT,
+  CLIENT_HEADER,
   LIMITS,
   STATUS_BY_OUTCOME,
   parseConflictReport,
@@ -35,7 +37,8 @@ import { createFileStore } from './store.js';
 /** @typedef {import('./profile.js').Transition} Transition */
 /** @typedef {(event: Record<string, unknown>) => void} Log */
 /** @typedef {{ status: number, html: string, headers?: Record<string, string> }} Reply */
-/** @typedef {(ctx: { url: URL, req: Request, params: string[] }) => Promise<Reply>} Handler */
+/** @typedef {import('./contract.js').Client} Client */
+/** @typedef {(ctx: { url: URL, req: Request, params: string[], client: Client }) => Promise<Reply>} Handler */
 
 /** Thrown by handlers to reply with an error page. */
 class HttpError extends Error {
@@ -73,20 +76,20 @@ export async function createApp({ store, log = logJson, now = () => new Date() }
     return run;
   }
 
-  /** @param {(state: State) => Transition} transition @returns {Promise<Reply>} */
-  async function write(transition) {
+  /** @param {(state: State) => Transition} transition @param {Client} client @returns {Promise<Reply>} */
+  async function write(transition, client) {
     const outcome = await mutate(transition);
     return {
       status: STATUS_BY_OUTCOME[outcome.kind],
-      html: renderProfilePage(state, { outcome: outcome.kind, message: outcome.message }),
+      html: renderProfilePage(state, { outcome: outcome.kind, message: outcome.message }, client),
     };
   }
 
-  /** @param {string[]} errors @returns {Reply} */
-  function invalidRequest(errors) {
+  /** @param {string[]} errors @param {Client} client @returns {Reply} */
+  function invalidRequest(errors, client) {
     return {
       status: STATUS_BY_OUTCOME.invalid,
-      html: renderProfilePage(state, { outcome: 'invalid', message: 'Request rejected.', errors }),
+      html: renderProfilePage(state, { outcome: 'invalid', message: 'Request rejected.', errors }, client),
     };
   }
 
@@ -94,39 +97,52 @@ export async function createApp({ store, log = logJson, now = () => new Date() }
   const routes = [
     ['GET', /^\/$/, async () => ({ status: 200, html: renderHomePage() })],
 
-    ['GET', /^\/profile$/, async () => ({ status: 200, html: renderProfilePage(state) })],
+    ['GET', /^\/profile$/, async ({ client }) => ({ status: 200, html: renderProfilePage(state, undefined, client) })],
 
     [
       'POST',
       /^\/profile$/,
-      async ({ req }) => {
+      async ({ req, client }) => {
         const parsed = parseProfileChange(await readForm(req));
-        if (!parsed.ok) return invalidRequest(parsed.errors);
-        return write((s) => applyChange(s, parsed.value, now()));
+        if (!parsed.ok) return invalidRequest(parsed.errors, client);
+        return write((s) => applyChange(s, parsed.value, now()), client);
       },
     ],
 
     [
       'POST',
       /^\/profile\/conflicts$/,
-      async ({ req }) => {
+      async ({ req, client }) => {
         const parsed = parseConflictReport(await readForm(req));
-        if (!parsed.ok) return invalidRequest(parsed.errors);
-        return write((s) => reportConflict(s, parsed.value, now()));
+        if (!parsed.ok) return invalidRequest(parsed.errors, client);
+        return write((s) => reportConflict(s, parsed.value, now()), client);
       },
     ],
 
     [
       'POST',
       /^\/profile\/conflicts\/([A-Za-z0-9]+)$/,
-      async ({ req, params: [id] }) => {
+      async ({ req, params: [id], client }) => {
         const parsed = parseConflictResolution(await readForm(req));
-        if (!parsed.ok) return invalidRequest(parsed.errors);
-        return write((s) => resolveConflict(s, id, parsed.value, now()));
+        if (!parsed.ok) return invalidRequest(parsed.errors, client);
+        return write((s) => resolveConflict(s, id, parsed.value, now()), client);
       },
     ],
 
-    ['POST', /^\/profile\/reset$/, async () => write(resetState)],
+    [
+      'POST',
+      /^\/profile\/reset$/,
+      async ({ client }) => {
+        if (client === 'agent') {
+          const message = 'The assistant may not reset the profile; only the user can, from the profile page.';
+          return {
+            status: STATUS_BY_OUTCOME.forbidden,
+            html: renderProfilePage(state, { outcome: 'forbidden', message }, client),
+          };
+        }
+        return write(resetState, client);
+      },
+    ],
 
     [
       'GET',
@@ -154,11 +170,13 @@ export async function createApp({ store, log = logJson, now = () => new Date() }
     const requestId = randomUUID();
     const started = performance.now();
     const url = new URL(req.url ?? '/', 'http://localhost');
+    /** @type {Client} */
+    const client = req.headers[CLIENT_HEADER.toLowerCase()] === AGENT_CLIENT ? 'agent' : 'browser';
 
     /** @type {Reply} */
     let reply;
     try {
-      reply = await route(routes, req, url);
+      reply = await route(routes, req, url, client);
     } catch (error) {
       if (error instanceof HttpError) {
         reply = { status: error.status, html: renderErrorPage(String(error.status), error.message), headers: error.headers };
@@ -182,6 +200,7 @@ export async function createApp({ store, log = logJson, now = () => new Date() }
       requestId,
       method: req.method,
       path: url.pathname,
+      client,
       status: reply.status,
       latencyMs: Math.round(performance.now() - started),
     });
@@ -189,7 +208,8 @@ export async function createApp({ store, log = logJson, now = () => new Date() }
 }
 
 // The frontend is loaded from file:// (origin "null"), so allow any origin.
-// Writes are form-encoded with no custom headers, so they need no preflight.
+// Browser form posts need no preflight; the agent's requests carry
+// X-Client, so they are preflighted and the answer is cached.
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Expose-Headers': 'X-Request-Id',
@@ -199,15 +219,20 @@ const CORS_HEADERS = {
  * @param {Array<[string, RegExp, Handler]>} routes
  * @param {Request} req
  * @param {URL} url
+ * @param {Client} client
  * @returns {Promise<Reply>}
  */
-async function route(routes, req, url) {
+async function route(routes, req, url, client) {
   const method = req.method === 'HEAD' ? 'GET' : req.method;
   if (method === 'OPTIONS') {
     return {
       status: 204,
       html: '',
-      headers: { 'Access-Control-Allow-Methods': 'GET, POST', 'Access-Control-Allow-Headers': 'Content-Type' },
+      headers: {
+        'Access-Control-Allow-Methods': 'GET, POST',
+        'Access-Control-Allow-Headers': `Content-Type, ${CLIENT_HEADER}`,
+        'Access-Control-Max-Age': '600',
+      },
     };
   }
   const matching = routes.filter(([, pattern]) => pattern.test(url.pathname));
@@ -219,7 +244,7 @@ async function route(routes, req, url) {
   }
   const [, pattern, handler] = found;
   const params = /** @type {RegExpExecArray} */ (pattern.exec(url.pathname)).slice(1);
-  return handler({ url, req, params });
+  return handler({ url, req, params, client });
 }
 
 /**

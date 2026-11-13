@@ -15,6 +15,7 @@
  *   parts marked by [data-role]: existing, new-information, evidence, proposed.
  * - Forms define writes: their action and input names are the request
  *   contract (see contract.js).
+ * - Pages served to the agent (X-Client: agent) omit forms it may not use.
  */
 import { FIELD_NAMES, OPS_BY_KIND, PROFILE_FIELDS, RESOLUTIONS, ROUTES } from './contract.js';
 
@@ -23,6 +24,7 @@ import { FIELD_NAMES, OPS_BY_KIND, PROFILE_FIELDS, RESOLUTIONS, ROUTES } from '.
 /** @typedef {import('./profile.js').ProfileValue} ProfileValue */
 /** @typedef {import('./destinations.js').DestinationInfo} DestinationInfo */
 /** @typedef {{ outcome: string, message: string, errors?: string[] }} Result */
+/** @typedef {import('./contract.js').Client} Client */
 
 /** @param {Result} [result] */
 export function renderHomePage(result) {
@@ -43,14 +45,15 @@ export function renderHomePage(result) {
 /**
  * @param {State} state
  * @param {Result} [result]
+ * @param {Client} [client]
  */
-export function renderProfilePage(state, result) {
+export function renderProfilePage(state, result, client = 'browser') {
   return page(
     'Travel profile',
     `${renderResult(result)}
 ${renderProfile(state)}
 ${renderConflicts(state.conflicts)}
-${renderProfileForms()}`,
+${renderProfileForms(client)}`,
   );
 }
 
@@ -201,7 +204,8 @@ function renderConflict(c) {
 </article>`;
 }
 
-function renderProfileForms() {
+/** @param {Client} client */
+function renderProfileForms(client) {
   const fieldOptions = FIELD_NAMES.map((f) => /** @type {[string, string]} */ ([f, `${PROFILE_FIELDS[f].label} (${f})`]));
   const ops = [...new Set(Object.values(OPS_BY_KIND).flat())].map((op) => /** @type {[string, string]} */ ([op, op]));
   const opHelp = Object.entries(OPS_BY_KIND)
@@ -223,11 +227,15 @@ function renderProfileForms() {
 <p><label>User said <input name="evidence" size="40" required></label></p>
 <p><button type="submit">Report conflict</button></p>
 </form>
-<h2>Start over</h2>
+${client === 'agent' ? '' : renderResetForm()}
+</section>`;
+}
+
+function renderResetForm() {
+  return `<h2>Start over</h2>
 <form id="reset-profile" method="post" action="${ROUTES.reset}">
 <p><button type="submit">Clear profile and conflicts</button></p>
-</form>
-</section>`;
+</form>`;
 }
 
 function renderLookupForm() {

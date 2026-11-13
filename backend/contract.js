@@ -61,10 +61,19 @@ export const ROUTES = Object.freeze({
 });
 
 /**
+ * Requests made by the LLM agent's tools carry `X-Client: agent`, so the
+ * service can apply agent policy (e.g. the agent may not reset the profile).
+ * This is a declaration by a cooperating client, not authentication.
+ * @typedef {'agent' | 'browser'} Client
+ */
+export const CLIENT_HEADER = 'X-Client';
+export const AGENT_CLIENT = 'agent';
+
+/**
  * What a write did. Every write response carries one in its #result section,
  * and the HTTP status is derived from it.
  * @typedef {'applied' | 'unchanged' | 'conflict' | 'reported' | 'resolved'
- *   | 'reset' | 'invalid' | 'not-found'} OutcomeKind
+ *   | 'reset' | 'invalid' | 'not-found' | 'forbidden'} OutcomeKind
  */
 export const STATUS_BY_OUTCOME = Object.freeze({
   applied: 200,
@@ -72,6 +81,7 @@ export const STATUS_BY_OUTCOME = Object.freeze({
   resolved: 200,
   reset: 200,
   reported: 201,
+  forbidden: 403,
   'not-found': 404,
   conflict: 409,
   invalid: 422,

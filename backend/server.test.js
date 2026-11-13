@@ -100,6 +100,31 @@ describe('profile service over HTTP', () => {
     assert.equal(res.headers.get('allow'), 'GET, POST');
   });
 
+  it('allows the agent header in preflight and caches the answer', async () => {
+    const res = await fetch(`${base}/profile`, {
+      method: 'OPTIONS',
+      headers: { 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'x-client' },
+    });
+    assert.equal(res.status, 204);
+    assert.match(res.headers.get('access-control-allow-headers') ?? '', /X-Client/);
+    assert.equal(res.headers.get('access-control-max-age'), '600');
+  });
+
+  it('hides the reset form from the agent and refuses its reset requests', async () => {
+    const asAgent = { 'X-Client': 'agent' };
+    await post('/profile', { field: 'interests', op: 'add', value: 'museums', evidence: 'I like museums' });
+
+    const page = await (await fetch(`${base}/profile`, { headers: asAgent })).text();
+    assert.doesNotMatch(page, /id="reset-profile"/);
+    assert.match(await (await fetch(`${base}/profile`)).text(), /id="reset-profile"/);
+
+    const res = await fetch(`${base}/profile/reset`, { method: 'POST', headers: asAgent, body: new URLSearchParams() });
+    assert.equal(res.status, 403);
+    const html = await res.text();
+    assert.equal(outcomeOf(html), 'forbidden');
+    assert.match(html, /<data value="museums">/);
+  });
+
   it('reset clears the profile and conflicts', async () => {
     const res = await post('/profile/reset', {});
     assert.equal(res.status, 200);
