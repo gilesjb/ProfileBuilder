@@ -4,8 +4,8 @@
  *
  * Markup conventions (the contract both frontend consumers rely on):
  * - Everything a consumer needs is inside <main>; <nav> is for people only.
- * - Sections and forms have stable ids: #result, #profile, #conflicts,
- *   #destination, #update-profile, #report-conflict, #reset-profile,
+ * - Sections and forms have stable ids: #result, #home, #guide, #profile,
+ *   #conflicts, #destination, #update-profile, #report-conflict, #reset-profile,
  *   #lookup-destination.
  * - #result[data-outcome] says what a request did (an OutcomeKind, or "error").
  * - [data-field] marks a field; profile fields also carry [data-kind] and,
@@ -18,6 +18,7 @@
  * - Pages served to the agent (X-Client: agent) omit forms it may not use.
  */
 import { FIELD_NAMES, OPS_BY_KIND, PROFILE_FIELDS, RESOLUTIONS, ROUTES } from './contract.js';
+import { GUIDE } from './guide.js';
 
 /** @typedef {import('./profile.js').State} State */
 /** @typedef {import('./profile.js').Conflict} Conflict */
@@ -28,6 +29,9 @@ import { FIELD_NAMES, OPS_BY_KIND, PROFILE_FIELDS, RESOLUTIONS, ROUTES } from '.
 
 /** @param {Result} [result] */
 export function renderHomePage(result) {
+  const guide = GUIDE.map(
+    ({ title, rules }) => `<h3>${esc(title)}</h3>\n<ul>\n${rules.map((r) => `<li>${esc(r)}</li>`).join('\n')}\n</ul>`,
+  ).join('\n');
   return page(
     'Profile service',
     `${renderResult(result)}
@@ -35,9 +39,13 @@ export function renderHomePage(result) {
 <h1>Profile service</h1>
 <p>Stores a traveler's profile and provides destination information.</p>
 <ul>
-<li><a href="${ROUTES.profile}">Travel profile</a></li>
-<li><a href="${ROUTES.destinations}">Destinations</a></li>
+<li><a href="${ROUTES.profile}">Travel profile</a>: the current profile, any open conflicts, and the forms for changing them.</li>
+<li><a href="${ROUTES.destinations}">Destinations</a>: the destinations this service has information on, and a lookup form.</li>
 </ul>
+</section>
+<section id="guide">
+<h2>Instructions for the assistant</h2>
+${guide}
 </section>`,
   );
 }
