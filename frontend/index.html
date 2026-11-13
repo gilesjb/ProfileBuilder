@@ -33,7 +33,9 @@
     --text-muted: #6f6a62;
     --text-faint: #a29c92;
     --accent: #2f6f62;
+    --accent-strong: #245a4f;
     --accent-soft: #e3efeb;
+    --on-accent: #ffffff;
     --warn: #a4640f;
     --warn-soft: #fbf1e1;
     --warn-border: #efd6ad;
@@ -43,6 +45,7 @@
     --radius-md: 12px;
     --shadow: 0 1px 2px rgb(29 28 26 / 0.04), 0 8px 24px rgb(29 28 26 / 0.06);
     --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", system-ui, sans-serif;
+    --header-height: 79px;
     color-scheme: light dark;
   }
 
@@ -56,7 +59,9 @@
       --text-muted: #a8a399;
       --text-faint: #6f6a62;
       --accent: #7cc4b2;
+      --accent-strong: #9ad3c4;
       --accent-soft: #1f322d;
+      --on-accent: #10201c;
       --warn: #e7b465;
       --warn-soft: #2c2417;
       --warn-border: #4a3a20;
@@ -78,7 +83,8 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  button { font: inherit; color: inherit; }
+  button, input, textarea { font: inherit; color: inherit; }
+  a { color: var(--accent); }
 
   .app {
     min-height: 100vh;
@@ -92,9 +98,12 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 18px 32px;
+    height: var(--header-height);
+    padding: 0 32px;
     border-bottom: 1px solid var(--border);
   }
+
+  .header .icon-button { margin-left: auto; }
 
   .brand-mark {
     width: 30px;
@@ -130,37 +139,7 @@
     box-shadow: var(--shadow);
   }
 
-  /* --- Chat placeholder ------------------------------------------------- */
-
-  .chat-placeholder {
-    min-height: calc(100vh - 130px);
-    display: grid;
-    place-items: center;
-    text-align: center;
-    padding: 48px;
-  }
-
-  .chat-placeholder h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
-  .chat-placeholder p { margin: 0 auto; max-width: 36ch; color: var(--text-muted); }
-
-  /* --- Profile panel ---------------------------------------------------- */
-
-  .panel {
-    position: sticky;
-    top: 24px;
-    overflow: hidden;
-  }
-
-  .panel-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 22px 24px 18px;
-  }
-
-  .panel-title { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
-  .panel-subtitle { margin: 2px 0 0; color: var(--text-muted); font-size: 13px; }
+  /* --- Buttons and inputs ----------------------------------------------- */
 
   .icon-button {
     flex: none;
@@ -179,6 +158,195 @@
   .icon-button:disabled { cursor: default; opacity: 0.6; }
   .icon-button.spinning svg { animation: spin 0.9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  .button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    font-size: 14px;
+    font-weight: 550;
+    cursor: pointer;
+    transition: background 120ms, border-color 120ms;
+  }
+  .button:hover { background: var(--surface-muted); }
+  .button:disabled { cursor: default; opacity: 0.5; }
+  .button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .button.primary:hover:not(:disabled) { background: var(--accent-strong); border-color: var(--accent-strong); }
+  .button.quiet { border-color: transparent; background: transparent; color: var(--text-muted); }
+  .button.quiet:hover { color: var(--text); background: var(--surface-muted); }
+
+  .input {
+    width: 100%;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    outline: none;
+    transition: border-color 120ms, box-shadow 120ms;
+  }
+  .input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  /* --- Chat ------------------------------------------------------------- */
+
+  .chat {
+    height: calc(100vh - var(--header-height) - 56px);
+    min-height: 420px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 28px 32px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .chat-empty {
+    margin: auto;
+    max-width: 40ch;
+    text-align: center;
+  }
+  .chat-empty h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  .chat-empty p { margin: 0; color: var(--text-muted); }
+
+  .message { display: flex; flex-direction: column; max-width: 72ch; }
+  .message.user { align-self: flex-end; align-items: flex-end; }
+  .message.assistant { align-self: flex-start; }
+
+  .bubble {
+    padding: 10px 15px;
+    border-radius: 16px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .message.user .bubble {
+    background: var(--accent);
+    color: var(--on-accent);
+    border-bottom-right-radius: 5px;
+  }
+  .message.assistant .bubble {
+    background: var(--surface-muted);
+    border-bottom-left-radius: 5px;
+  }
+
+  .caret::after {
+    content: "";
+    display: inline-block;
+    width: 7px;
+    height: 1em;
+    margin-left: 2px;
+    vertical-align: -2px;
+    border-radius: 2px;
+    background: var(--text-muted);
+    animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .typing { display: inline-flex; gap: 4px; padding: 4px 0; }
+  .typing span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text-faint);
+    animation: bounce 1.2s ease-in-out infinite;
+  }
+  .typing span:nth-child(2) { animation-delay: 0.15s; }
+  .typing span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes bounce { 0%, 60%, 100% { transform: none; opacity: 0.5; } 30% { transform: translateY(-4px); opacity: 1; } }
+
+  .message-note { margin-top: 4px; font-size: 12px; color: var(--text-faint); }
+
+  .message-error {
+    margin-top: 6px;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    background: var(--danger-soft);
+    color: var(--danger);
+    font-size: 13px;
+  }
+  .message-error strong { display: block; }
+  .message-error .detail { color: var(--text-muted); margin-top: 2px; }
+  .message-error .actions { display: flex; gap: 8px; margin-top: 8px; }
+  .message-error .button { padding: 4px 12px; font-size: 13px; background: transparent; border-color: currentColor; color: inherit; }
+
+  .composer {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    padding: 14px 16px 16px;
+    border-top: 1px solid var(--border);
+  }
+  .composer textarea {
+    flex: 1;
+    resize: none;
+    max-height: 160px;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    line-height: 1.45;
+    outline: none;
+    transition: border-color 120ms, box-shadow 120ms;
+  }
+  .composer textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .composer .button { height: 42px; }
+
+  /* --- Settings --------------------------------------------------------- */
+
+  .setup {
+    margin: auto;
+    width: min(440px, 100%);
+    padding: 32px;
+  }
+  .setup h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  .setup > p { margin: 0 0 20px; color: var(--text-muted); }
+
+  .settings-form { display: grid; gap: 16px; }
+  .settings-form label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; }
+  .settings-form .hint { font-size: 12px; font-weight: 400; color: var(--text-muted); }
+  .settings-form .actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .settings-form .actions .spacer { flex: 1; }
+
+  .overlay {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgb(20 20 19 / 0.35);
+    backdrop-filter: blur(2px);
+    z-index: 10;
+  }
+  .dialog { width: min(460px, 100%); padding: 24px; }
+  .dialog h2 { margin: 0 0 16px; font-size: 17px; font-weight: 650; }
+
+  /* --- Profile panel ---------------------------------------------------- */
+
+  .panel {
+    position: sticky;
+    top: 24px;
+    max-height: calc(100vh - var(--header-height) - 56px);
+    overflow-y: auto;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 22px 24px 18px;
+  }
+
+  .panel-title { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+  .panel-subtitle { margin: 2px 0 0; color: var(--text-muted); font-size: 13px; }
 
   .progress { padding: 0 24px 18px; }
   .progress-track { height: 6px; border-radius: 99px; background: var(--surface-muted); overflow: hidden; }
@@ -269,7 +437,7 @@
   .conflict-compare dt { color: var(--text-muted); }
   .conflict-compare dd { margin: 0; }
 
-  /* --- States ----------------------------------------------------------- */
+  /* --- Panel states ----------------------------------------------------- */
 
   .notice {
     margin: 0 16px 16px;
@@ -313,7 +481,7 @@
 <div id="root"></div>
 
 <script type="module">
-import { createElement, useCallback, useEffect, useState } from 'react';
+import { createElement, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import htm from 'htm';
 
@@ -322,6 +490,14 @@ const html = htm.bind(createElement);
 // --- Config -----------------------------------------------------------------
 
 const BACKEND_URL = 'http://localhost:3000';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const DEFAULT_MODEL = 'anthropic/claude-haiku-5.5';
+const STORAGE_KEYS = { apiKey: 'profileBuilder.openRouterKey', model: 'profileBuilder.model' };
+
+/** One JSON line per LLM call (and later, tool call). */
+function logEvent(event) {
+  console.info(JSON.stringify({ time: new Date().toISOString(), ...event }));
+}
 
 // --- Contract parser --------------------------------------------------------
 // Turns the profile service's HTML into a validated model. This is the only
@@ -417,6 +593,114 @@ async function fetchProfile() {
   return parseProfilePage(await response.text());
 }
 
+// --- OpenRouter client ------------------------------------------------------
+
+/**
+ * A failed model call, classified so the UI can say what to do about it.
+ * @typedef {'invalid-key' | 'no-credits' | 'rate-limited' | 'rejected' | 'unavailable' | 'interrupted'} LlmErrorKind
+ */
+class LlmError extends Error {
+  /** @param {LlmErrorKind} kind @param {string} message @param {{ status?: number, detail?: string }} [info] */
+  constructor(kind, message, { status, detail } = {}) {
+    super(message);
+    this.kind = kind;
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+/**
+ * Streams a chat completion from OpenRouter as server-sent events.
+ * Yields { type: 'text', text } as tokens arrive, then one
+ * { type: 'done', id, usage, finishReason }. Throws LlmError on failure, or
+ * the fetch AbortError if `signal` is aborted.
+ */
+async function* streamChatCompletion({ apiKey, model, messages, signal }) {
+  let response;
+  try {
+    response = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'X-Title': 'Profile Builder',
+      },
+      body: JSON.stringify({ model, messages, stream: true, usage: { include: true } }),
+      signal,
+    });
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw new LlmError('unavailable', "Couldn't reach OpenRouter. Check your connection and try again.");
+  }
+  if (!response.ok) throw await errorFromResponse(response);
+
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = '';
+  let id = null;
+  let usage = null;
+  let finishReason = null;
+  let sawDone = false;
+  try {
+    while (!sawDone) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += value;
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        // Lines starting with ":" are keep-alive comments; blank lines separate events.
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') {
+          sawDone = true;
+          break;
+        }
+        let chunk;
+        try {
+          chunk = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        if (chunk.error) {
+          throw new LlmError('interrupted', 'The model stopped with an error partway through its reply.', {
+            detail: chunk.error.message,
+          });
+        }
+        id ??= chunk.id ?? null;
+        usage = chunk.usage ?? usage;
+        const choice = chunk.choices?.[0];
+        finishReason = choice?.finish_reason ?? finishReason;
+        if (choice?.delta?.content) yield { type: 'text', text: choice.delta.content };
+      }
+    }
+  } catch (error) {
+    if (signal.aborted || error instanceof LlmError) throw error;
+    throw new LlmError('interrupted', 'The connection dropped partway through the reply.');
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  if (!sawDone && !finishReason) throw new LlmError('interrupted', 'The reply ended unexpectedly.');
+  yield { type: 'done', id, usage, finishReason };
+}
+
+/** @param {Response} response @returns {Promise<LlmError>} */
+async function errorFromResponse(response) {
+  const status = response.status;
+  let detail = '';
+  try {
+    detail = (await response.json())?.error?.message ?? '';
+  } catch {}
+  const info = { status, detail };
+  if (status === 401) return new LlmError('invalid-key', 'OpenRouter rejected your API key.', info);
+  if (status === 402) return new LlmError('no-credits', 'Your OpenRouter account is out of credits.', info);
+  if (status === 429) {
+    return new LlmError('rate-limited', 'Rate limited by OpenRouter or the model provider. Wait a moment, then retry.', info);
+  }
+  // 400 (e.g. an unknown model ID) and 403 (e.g. input flagged by moderation).
+  if (status >= 400 && status < 500) return new LlmError('rejected', 'OpenRouter rejected the request.', info);
+  return new LlmError('unavailable', 'OpenRouter or the model provider is unavailable right now.', info);
+}
+
 // --- State ------------------------------------------------------------------
 
 /**
@@ -451,22 +735,137 @@ function useProfile() {
   return { model, error, loading, loadedAt, refresh };
 }
 
+/**
+ * The OpenRouter key and model, kept in localStorage. The key never leaves
+ * this browser except in requests to OpenRouter.
+ */
+function useSettings() {
+  const [settings, setSettings] = useState(() => ({
+    apiKey: localStorage.getItem(STORAGE_KEYS.apiKey) ?? '',
+    model: localStorage.getItem(STORAGE_KEYS.model) || DEFAULT_MODEL,
+  }));
+
+  const save = useCallback(({ apiKey, model }) => {
+    const next = { apiKey: apiKey.trim(), model: model.trim() || DEFAULT_MODEL };
+    if (next.apiKey) localStorage.setItem(STORAGE_KEYS.apiKey, next.apiKey);
+    else localStorage.removeItem(STORAGE_KEYS.apiKey);
+    if (next.model === DEFAULT_MODEL) localStorage.removeItem(STORAGE_KEYS.model);
+    else localStorage.setItem(STORAGE_KEYS.model, next.model);
+    setSettings(next);
+  }, []);
+
+  return [settings, save];
+}
+
+/**
+ * @typedef {{ id: string, role: 'user', content: string }} UserMessage
+ * @typedef {{ id: string, role: 'assistant', content: string,
+ *             status: 'streaming' | 'done' | 'stopped' | 'error', error?: LlmError }} AssistantMessage
+ * @typedef {UserMessage | AssistantMessage} ChatMessage
+ */
+
+/** The conversation, and sending, stopping and retrying replies. */
+function useChat({ apiKey, model }) {
+  const [messages, setMessages] = useState(/** @type {ChatMessage[]} */ ([]));
+  const [busy, setBusy] = useState(false);
+  const controllerRef = useRef(/** @type {AbortController | null} */ (null));
+
+  const updateMessage = (id, change) => setMessages((ms) => ms.map((m) => (m.id === id ? { ...m, ...change(m) } : m)));
+
+  /** Streams an assistant reply to `history`, which ends with a user message. */
+  const respond = async (history) => {
+    const reply = { id: crypto.randomUUID(), role: 'assistant', content: '', status: 'streaming' };
+    setMessages([...history, reply]);
+    setBusy(true);
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    const started = performance.now();
+    const log = (outcome, extra = {}) =>
+      logEvent({ event: 'llm.call', model, outcome, latencyMs: Math.round(performance.now() - started), ...extra });
+
+    try {
+      const stream = streamChatCompletion({ apiKey, model, messages: toApiMessages(history), signal: controller.signal });
+      for await (const event of stream) {
+        if (event.type === 'text') updateMessage(reply.id, (m) => ({ content: m.content + event.text }));
+        if (event.type === 'done') {
+          updateMessage(reply.id, () => ({ status: 'done' }));
+          log('ok', { requestId: event.id, finishReason: event.finishReason, usage: event.usage });
+        }
+      }
+    } catch (error) {
+      if (controller.signal.aborted) {
+        updateMessage(reply.id, () => ({ status: 'stopped' }));
+        log('stopped');
+      } else {
+        const llmError = error instanceof LlmError ? error : new LlmError('unavailable', 'Something went wrong.');
+        updateMessage(reply.id, () => ({ status: 'error', error: llmError }));
+        log('error', { kind: llmError.kind, status: llmError.status, detail: llmError.detail ?? String(error) });
+      }
+    } finally {
+      controllerRef.current = null;
+      setBusy(false);
+    }
+  };
+
+  const send = (text) => {
+    if (busy) return;
+    respond([...messages, { id: crypto.randomUUID(), role: 'user', content: text }]);
+  };
+
+  /** Re-requests the last reply if it failed. */
+  const retry = () => {
+    const last = messages.at(-1);
+    if (busy || last?.role !== 'assistant' || last.status !== 'error') return;
+    respond(messages.slice(0, -1));
+  };
+
+  const stop = () => controllerRef.current?.abort();
+
+  return { messages, busy, send, retry, stop };
+}
+
+/**
+ * What the model sees: user messages and replies the user actually received.
+ * Failed replies are left out, so a retry starts clean.
+ * @param {ChatMessage[]} messages
+ */
+function toApiMessages(messages) {
+  return messages
+    .filter((m) => m.role === 'user' || ((m.status === 'done' || m.status === 'stopped') && m.content))
+    .map(({ role, content }) => ({ role, content }));
+}
+
 // --- Components -------------------------------------------------------------
 
 function App() {
   const profile = useProfile();
+  const [settings, saveSettings] = useSettings();
+  const chat = useChat(settings);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   return html`
     <div className="app">
-      <${Header} />
+      <${Header} onOpenSettings=${() => setSettingsOpen(true)} />
       <div className="workspace">
-        <${ChatPlaceholder} />
+        ${settings.apiKey
+          ? html`<${Chat} ...${chat} onOpenSettings=${() => setSettingsOpen(true)} />`
+          : html`<${SetupCard} settings=${settings} onSave=${saveSettings} />`}
         <${ProfilePanel} ...${profile} />
       </div>
+      ${settingsOpen &&
+      html`<${SettingsDialog}
+        settings=${settings}
+        onSave=${(next) => {
+          saveSettings(next);
+          setSettingsOpen(false);
+        }}
+        onClose=${() => setSettingsOpen(false)}
+      />`}
     </div>
   `;
 }
 
-function Header() {
+function Header({ onOpenSettings }) {
   return html`
     <header className="header">
       <div className="brand-mark" aria-hidden="true">
@@ -479,20 +878,215 @@ function Header() {
         <div className="brand-name">Profile Builder</div>
         <div className="brand-tagline">Your travel preferences, built through conversation</div>
       </div>
+      <button className="icon-button" onClick=${onOpenSettings} aria-label="Settings" title="Settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+        </svg>
+      </button>
     </header>
   `;
 }
 
-function ChatPlaceholder() {
+// --- Chat components --------------------------------------------------------
+
+function Chat({ messages, busy, send, retry, stop, onOpenSettings }) {
+  const endRef = useRef(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: 'end' });
+  }, [messages]);
+
   return html`
-    <section className="card chat-placeholder" aria-label="Chat">
-      <div>
-        <h2>Chat is coming next</h2>
-        <p>You'll talk to the assistant here, and your profile will fill in on the right as you go.</p>
+    <section className="card chat" aria-label="Chat">
+      <div className="messages" aria-live="polite">
+        ${messages.length === 0 &&
+        html`<div className="chat-empty">
+          <h2>Tell me how you like to travel</h2>
+          <p>Where you've loved going, who you travel with, what you like to eat. Your profile fills in on the right.</p>
+        </div>`}
+        ${messages.map(
+          (m, i) => html`<${Message}
+            key=${m.id}
+            message=${m}
+            isLast=${i === messages.length - 1}
+            onRetry=${retry}
+            onOpenSettings=${onOpenSettings}
+          />`,
+        )}
+        <div ref=${endRef} />
+      </div>
+      <${Composer} busy=${busy} onSend=${send} onStop=${stop} />
+    </section>
+  `;
+}
+
+function Message({ message, isLast, onRetry, onOpenSettings }) {
+  if (message.role === 'user') {
+    return html`<div className="message user"><div className="bubble">${message.content}</div></div>`;
+  }
+  const { content, status, error } = message;
+  const streaming = status === 'streaming';
+  return html`
+    <div className="message assistant">
+      ${(content || streaming) &&
+      html`<div className=${`bubble${streaming && content ? ' caret' : ''}`}>
+        ${content || html`<span className="typing" aria-label="Assistant is typing"><span /><span /><span /></span>`}
+      </div>`}
+      ${status === 'stopped' && html`<div className="message-note">Stopped</div>`}
+      ${status === 'error' &&
+      html`<${MessageError} error=${error} partial=${Boolean(content)} canRetry=${isLast} onRetry=${onRetry} onOpenSettings=${onOpenSettings} />`}
+    </div>
+  `;
+}
+
+function MessageError({ error, partial, canRetry, onRetry, onOpenSettings }) {
+  const needsSettings = error.kind === 'invalid-key' || error.kind === 'rejected' || error.kind === 'no-credits';
+  return html`
+    <div className="message-error" role="alert">
+      <strong>${error.message}</strong>
+      ${error.detail && html`<div className="detail">${error.detail}</div>`}
+      ${partial && html`<div className="detail">The text above is incomplete.</div>`}
+      <div className="actions">
+        ${canRetry && html`<button className="button" onClick=${onRetry}>Retry</button>`}
+        ${needsSettings && html`<button className="button" onClick=${onOpenSettings}>Open settings</button>`}
+      </div>
+    </div>
+  `;
+}
+
+function Composer({ busy, onSend, onStop }) {
+  const [text, setText] = useState('');
+  const textareaRef = useRef(null);
+
+  // Grow with the content, up to the max-height set in CSS.
+  useEffect(() => {
+    const el = textareaRef.current;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight + 2}px`;
+  }, [text]);
+
+  const submit = () => {
+    const message = text.trim();
+    if (!message || busy) return;
+    onSend(message);
+    setText('');
+  };
+
+  return html`
+    <form
+      className="composer"
+      onSubmit=${(e) => {
+        e.preventDefault();
+        submit();
+      }}
+    >
+      <textarea
+        ref=${textareaRef}
+        rows="1"
+        value=${text}
+        placeholder=${busy ? 'Waiting for the reply…' : 'Message the assistant'}
+        aria-label="Message"
+        onInput=${(e) => setText(e.target.value)}
+        onKeyDown=${(e) => {
+          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            submit();
+          }
+        }}
+      />
+      ${busy
+        ? html`<button type="button" className="button" onClick=${onStop}>Stop</button>`
+        : html`<button type="submit" className="button primary" disabled=${!text.trim()}>Send</button>`}
+    </form>
+  `;
+}
+
+// --- Settings components ----------------------------------------------------
+
+function SetupCard({ settings, onSave }) {
+  return html`
+    <section className="card chat" aria-label="Set up">
+      <div className="setup">
+        <h2>Connect a model</h2>
+        <p>Profile Builder talks to the model through OpenRouter, using your own API key.</p>
+        <${SettingsForm} settings=${settings} onSave=${onSave} submitLabel="Start chatting" />
       </div>
     </section>
   `;
 }
+
+function SettingsDialog({ settings, onSave, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return html`
+    <div className="overlay" onMouseDown=${(e) => e.target === e.currentTarget && onClose()}>
+      <div className="card dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <h2 id="settings-title">Settings</h2>
+        <${SettingsForm} settings=${settings} onSave=${onSave} onCancel=${onClose} submitLabel="Save" allowRemove />
+      </div>
+    </div>
+  `;
+}
+
+function SettingsForm({ settings, onSave, onCancel, submitLabel, allowRemove = false }) {
+  const [apiKey, setApiKey] = useState(settings.apiKey);
+  const [model, setModel] = useState(settings.model);
+
+  return html`
+    <form
+      className="settings-form"
+      onSubmit=${(e) => {
+        e.preventDefault();
+        onSave({ apiKey, model });
+      }}
+    >
+      <label>
+        OpenRouter API key
+        <input
+          className="input"
+          type="password"
+          autoComplete="off"
+          spellCheck="false"
+          placeholder="sk-or-…"
+          value=${apiKey}
+          onInput=${(e) => setApiKey(e.target.value)}
+          autoFocus
+        />
+        <span className="hint">
+          Get one at <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer">openrouter.ai/keys</a>.
+          It's stored only in this browser and sent only to OpenRouter.
+        </span>
+      </label>
+      <label>
+        Model
+        <input
+          className="input"
+          spellCheck="false"
+          placeholder=${DEFAULT_MODEL}
+          value=${model}
+          onInput=${(e) => setModel(e.target.value)}
+        />
+        <span className="hint">Any OpenRouter model ID. Default: ${DEFAULT_MODEL}.</span>
+      </label>
+      <div className="actions">
+        ${allowRemove &&
+        settings.apiKey &&
+        html`<button type="button" className="button quiet" onClick=${() => onSave({ apiKey: '', model })}>
+          Remove key
+        </button>`}
+        <span className="spacer" />
+        ${onCancel && html`<button type="button" className="button" onClick=${onCancel}>Cancel</button>`}
+        <button type="submit" className="button primary" disabled=${!apiKey.trim()}>${submitLabel}</button>
+      </div>
+    </form>
+  `;
+}
+
+// --- Profile panel components -----------------------------------------------
 
 function ProfilePanel({ model, error, loading, loadedAt, refresh }) {
   return html`
