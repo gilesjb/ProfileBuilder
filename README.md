@@ -154,7 +154,29 @@ frontend/
 
 - **Automated:** 38 backend tests cover the conflict rules, form validation, destination lookup, stored-state validation and HTTP behavior (status codes, CORS, preflight, agent policy).
 - **End to end, scripted:** I drove headless Chrome over the DevTools Protocol against a mock OpenRouter that streams SSE, including fragmented tool calls. That covered streaming, Stop, a 401, a stream dropped partway with retry, the tool loop, the panel updating mid-turn, and the off-site path guard. These scripts aren't in the repo.
-- **With the real model:** chatting, extraction and the clear/remove flow were tried by hand. *The full use-case pass in `USE_CASES.md` against the real model is still to do. See Known gaps.*
+- **With the real model:** I ran 8 scripted conversations (22 turns) through the real frontend against `anthropic/claude-haiku-5.5`, each on a fresh or seeded profile, and checked every reply, tool call and resulting profile by hand. They cost $0.044 in total (378k prompt tokens, 13k completion tokens), with a median of 3.6 s of model time per turn and a maximum of 11 s.
+
+| Use cases | Result | Notes |
+|---|---|---|
+| UC-04 guided interview | ✅ | One or two questions per turn, aimed at empty fields. It never re-asked about filled ones. |
+| UC-05–07, UC-10 extraction | ✅ | All three field groups saved from one message each. "museums" was added to interests with no conflict. |
+| UC-08, UC-09 no invention / out of scope | ✅ | A vague message saved nothing. For budget and pace: "My profile doesn't have a field for budget or pace, so I'll keep those in mind… without saving them." |
+| UC-15 known destination | ✅ | Lisbon's seasons, "known for", the limited vegetarian options in tascas, the hills and the visa note all came from the data. It related them to the profile (vegetarian, stairs). *Minor overreach:* it applied Lisbon's general Schengen note ("many passport holders") to "as a US passport holder". |
+| UC-16, UC-17 unknown destination | ✅ | 404 → "I don't have information on Ulaanbaatar", plus the list of known destinations. No invented facts. In the two-place message it fetched Kyoto and reused the earlier Ulaanbaatar 404. |
+| UC-18 case-insensitive lookup | ✅ (not exercised) | The model normalized "kyoto" to `Kyoto` itself. Case-insensitive matching is covered by the unit tests. |
+| UC-19 follow-up consistency | ✅ | Its answer ("spring and fall", "$150 mid-range") matched the data, using the earlier tool result. |
+| UC-21 conflict surfaced | ✅ ×4 | In every steakhouse run it read the profile, reported a conflict, left "vegetarian" untouched and asked which was right. |
+| UC-22 / 23 / 24 resolve keep / replace / clarify | ✅ | Keep → resolved. "I started eating meat again" → vegetarian removed, which closed the conflict. "It's for my partner" → resolved with keep, and it *asked* before recording the partner instead of inferring. |
+| UC-25, UC-26 ignored conflict / reload | ✅ | It saved the hotel preference, kept the conflict open and raised it again. After a reload, the panel still showed the conflict card and the field flag. |
+| UC-27 explicit correction | ✅ | Flying was removed and trains added, with no conflict. *Noisy:* 4 submissions, and the reply described its own intermediate mistake. |
+| UC-28 clear everything | ⚠️ partial | It cleared interests and transport with no conflicts, but kept home base ("describes where you live rather than a preference") and asked whether to clear it. That's defensible, but not what was asked. |
+| UC-29 single-value update | ✅ | Boston → Chicago with no conflict. |
+| UC-33 tool calls visible | ✅ | Rows were visible during every turn and gone afterwards. The backend logged 63 agent requests, all marked `client: agent`. |
+| UC-11 live panel | not measured directly | The panel was updated from tool responses during each turn, but this run didn't time it. The mock run showed it updating before the reply finished. |
+
+Other observations:
+- **It doesn't always read `/profile` first.** The guide asks for this every turn, but the model often relied on earlier tool results in the conversation history instead. That did no harm in these runs.
+- **Prompt size grows quickly**, to about 21k tokens by turn 5, because every earlier tool result's HTML is replayed.
 
 ## Known gaps
 
@@ -164,7 +186,9 @@ frontend/
 - **No frontend tests.** The parser and the agent loop were checked with the mock harness but have no automated tests. *Fix:* move the parser into a classic script that `node:test` can load with a DOM shim, and commit the mock harness.
 - **Replies are plain text.** Markdown isn't rendered, and the guide asks the model not to use it.
 - **Single-value fields** can't hold two values, such as a dual passport. The guide says to report that as a conflict, which is honest but clumsy.
-- **The use-case pass against the real model** hasn't been done in full.
+- **Prompt growth.** Earlier turns are replayed with their full tool HTML, so prompts reach about 21k tokens within five turns. *Fix:* replay older tool results in summary form (status and outcome only), and re-read `/profile` when needed.
+- **"Clear everything" stopped short** (UC-28): the model kept home base, judging it not to be a preference. *Fix:* say in the guide that clearing means every field.
+- **The model sometimes over-applies a general visa note to the user's passport** (UC-15). *Fix:* make visa notes passport-specific in the data, or tell the guide not to extend them.
 
 ## With another day
 
