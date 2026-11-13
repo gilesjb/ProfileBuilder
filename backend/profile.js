@@ -1,10 +1,17 @@
 // @ts-check
 /**
- * Profile domain logic: applying changes, detecting and resolving conflicts.
+ * Profile domain logic: applying changes, and recording and resolving conflicts.
  *
  * Pure functions with no I/O. Each takes the current state and returns
  * `{ state, outcome }`. When nothing changes (or the request is rejected) the
  * returned state is the same object that was passed in.
+ *
+ * This module does not decide what counts as a contradiction. Only the LLM
+ * can tell that "wants a steakhouse" contradicts "vegetarian", or that a new
+ * home city is a move rather than a mistake. Changes the user states are
+ * applied as given; contradictions the LLM notices are reported, and this
+ * module keeps them: it persists them, removes duplicates, and closes them
+ * once they are resolved or the value they refer to is gone.
  */
 import { FIELD_NAMES, LIMITS, PROFILE_FIELDS, normalizeText, sameText } from './contract.js';
 
@@ -20,16 +27,14 @@ import { FIELD_NAMES, LIMITS, PROFILE_FIELDS, normalizeText, sameText } from './
 /** @typedef {Record<FieldName, ProfileValue[]>} Profile */
 
 /**
- * An open contradiction between a stored value and new information.
- * `proposed` is the change that triggered it (structural conflicts), or null
- * when the LLM reported a semantic contradiction.
+ * An open contradiction, reported by the LLM, between the stored values of a
+ * field and something the user said.
  * @typedef {{
  *   id: string,
  *   field: FieldName,
  *   existing: string[],
  *   newInformation: string,
  *   evidence: string,
- *   proposed: ProfileChange | null,
  *   createdAt: string,
  * }} Conflict
  */
@@ -48,11 +53,9 @@ export function emptyState() {
 }
 
 /**
- * Applies a change, or records a conflict if it would contradict a stored
- * value. Adding to a list never conflicts, and neither does removing a value:
- * a removal is the user retracting a preference, not new information
- * contradicting it. Replacing a stored single value with a different one
- * always conflicts (CONF-2).
+ * Applies a change the user stated. `set` replaces a single value; `remove`
+ * retracts a value. Open conflicts about a value that is replaced or removed
+ * are closed, since the user has now said what's true.
  * @param {State} state
  * @param {ProfileChange} change
  * @param {Date} now
@@ -74,44 +77,69 @@ export function applyChange(state, change, now) {
   }
 
   if (op === 'set') {
-    if (current.length === 0) {
-      const next = withField(state, field, [toValue(value, change.evidence, now)]);
-      return { state: next, outcome: { kind: 'applied', message: `Set ${label} to "${value}".` } };
-    }
     if (isStored) return unchanged(state, `${label} is already "${value}".`);
-    return recordConflict(state, field, `change to "${value}"`, change.evidence, change, now);
+    const replaced = current.map((v) => v.value);
+    const next = withField(state, field, [toValue(value, change.evidence, now)]);
+    const message = replaced.length
+      ? `Changed ${label} from ${quoteAll(replaced)} to "${value}".`
+      : `Set ${label} to "${value}".`;
+    return closeConflictsAbout(next, field, replaced, message);
   }
 
   // op === 'remove'
   if (!isStored) return unchanged(state, `${label} does not include "${value}"; nothing to remove.`);
-  const removed = withField(state, field, current.filter((v) => !sameText(v.value, value)));
-  // Conflicts about the removed value have nothing left to contradict.
-  const moot = removed.conflicts.filter((c) => c.field === field && c.existing.some((e) => sameText(e, value)));
-  const next = { ...removed, conflicts: removed.conflicts.filter((c) => !moot.includes(c)) };
-  const closed = moot.length ? ` Closed conflict${moot.length > 1 ? 's' : ''} ${moot.map((c) => c.id).join(', ')}, which depended on it.` : '';
-  return { state: next, outcome: { kind: 'applied', message: `Removed "${value}" from ${label}.${closed}` } };
+  const next = withField(state, field, current.filter((v) => !sameText(v.value, value)));
+  return closeConflictsAbout(next, field, [value], `Removed "${value}" from ${label}.`);
 }
 
 /**
- * Records a contradiction the LLM noticed but that isn't expressible as a
- * change (e.g. "wants a steakhouse" vs. a vegetarian diet).
+ * Records a contradiction the LLM noticed between a stored value and
+ * something the user said. The stored value is left unchanged (CONF-2).
  * @param {State} state
  * @param {ConflictReport} report
  * @param {Date} now
  * @returns {Transition}
  */
 export function reportConflict(state, report, now) {
-  const label = PROFILE_FIELDS[report.field].label;
-  if (state.profile[report.field].length === 0) {
+  const { field, evidence } = report;
+  const label = PROFILE_FIELDS[field].label;
+  if (state.profile[field].length === 0) {
     return invalid(
       state,
       `${label} has no stored value, so nothing contradicts it. If this is a new preference, submit it as a profile change instead.`,
     );
   }
-  return recordConflict(state, report.field, report.newInformation, report.evidence, null, now);
+
+  const newInformation = normalizeText(report.newInformation);
+  const duplicate = state.conflicts.find((c) => c.field === field && sameText(c.newInformation, newInformation));
+  if (duplicate) {
+    return unchanged(state, `This is already open as conflict ${duplicate.id}. Ask the user how to resolve it.`);
+  }
+
+  /** @type {Conflict} */
+  const conflict = {
+    id: `c${state.nextConflictId}`,
+    field,
+    existing: state.profile[field].map((v) => v.value),
+    newInformation,
+    evidence,
+    createdAt: now.toISOString(),
+  };
+  return {
+    state: { ...state, conflicts: [...state.conflicts, conflict], nextConflictId: state.nextConflictId + 1 },
+    outcome: {
+      kind: 'reported',
+      message:
+        `Recorded conflict ${conflict.id}: ${label} is currently ${describe(state.profile[field])}, which contradicts this new information: ${newInformation}. ` +
+        `The stored value is unchanged. Ask the user which is right, then resolve conflict ${conflict.id}.`,
+      conflict,
+    },
+  };
 }
 
 /**
+ * Closes a conflict. `keep` leaves the field as it is; `replace` sets it to
+ * the given values (possibly none).
  * @param {State} state
  * @param {string} id
  * @param {ConflictResolution} resolution
@@ -124,38 +152,24 @@ export function resolveConflict(state, id, resolution, now) {
 
   const { field } = conflict;
   const label = PROFILE_FIELDS[field].label;
-  const evidence = resolution.evidence || conflict.evidence;
-  const remaining = state.conflicts.filter((c) => c.id !== id);
-  /** @param {ProfileValue[]} values @param {string} message @returns {Transition} */
-  const resolved = (values, message) => ({
-    state: { ...withField(state, field, values), conflicts: remaining },
-    outcome: { kind: 'resolved', message: `Conflict ${id} resolved: ${message}` },
-  });
-
-  switch (resolution.resolution) {
-    case 'keep':
-      return resolved(state.profile[field], `kept ${label} as ${describe(state.profile[field])}.`);
-
-    case 'accept': {
-      const change = conflict.proposed;
-      if (!change) {
-        return invalid(state, `Conflict ${id} has no proposed change to accept; resolve it with keep or replace.`);
-      }
-      const values =
-        change.op === 'remove'
-          ? state.profile[field].filter((v) => !sameText(v.value, change.value))
-          : [toValue(change.value, evidence, now)];
-      return resolved(values, `${label} is now ${describe(values)}.`);
+  let values = state.profile[field];
+  if (resolution.resolution === 'replace') {
+    if (PROFILE_FIELDS[field].kind === 'single' && resolution.values.length > 1) {
+      return invalid(state, `${label} holds a single value; submit at most one.`);
     }
-
-    case 'replace': {
-      if (PROFILE_FIELDS[field].kind === 'single' && resolution.values.length > 1) {
-        return invalid(state, `${label} holds a single value; submit at most one.`);
-      }
-      const values = dedupe(resolution.values).map((v) => toValue(v, evidence, now));
-      return resolved(values, `${label} is now ${describe(values)}.`);
-    }
+    const evidence = resolution.evidence || conflict.evidence;
+    values = dedupe(resolution.values).map((v) => toValue(v, evidence, now));
   }
+  return {
+    state: { ...withField(state, field, values), conflicts: state.conflicts.filter((c) => c.id !== id) },
+    outcome: {
+      kind: 'resolved',
+      message:
+        resolution.resolution === 'keep'
+          ? `Conflict ${id} resolved: kept ${label} as ${describe(values)}.`
+          : `Conflict ${id} resolved: ${label} is now ${describe(values)}.`,
+    },
+  };
 }
 
 /** @param {State} _state @returns {Transition} */
@@ -182,21 +196,23 @@ export function parseState(raw) {
     if (PROFILE_FIELDS[field].kind === 'single' && values.length > 1) fail(`${field} has more than one value`);
     state.profile[field] = values;
   }
-  for (const c of data.conflicts) {
+  state.conflicts = data.conflicts.map((c) => {
     if (
       !isObject(c) ||
       typeof c.id !== 'string' ||
       !(/** @type {string[]} */ (FIELD_NAMES)).includes(/** @type {string} */ (c.field)) ||
       !Array.isArray(c.existing) ||
+      !c.existing.every((e) => typeof e === 'string') ||
       typeof c.newInformation !== 'string' ||
       typeof c.evidence !== 'string' ||
-      typeof c.createdAt !== 'string' ||
-      !(c.proposed === null || isObject(c.proposed))
+      typeof c.createdAt !== 'string'
     ) {
-      fail('bad conflict');
+      return fail('bad conflict');
     }
-  }
-  state.conflicts = /** @type {Conflict[]} */ (data.conflicts);
+    // Keep only known properties, which also drops fields from older versions.
+    const { id, field, existing, newInformation, evidence, createdAt } = c;
+    return /** @type {Conflict} */ ({ id, field, existing, newInformation, evidence, createdAt });
+  });
   if (typeof data.nextConflictId !== 'number' || !Number.isInteger(data.nextConflictId)) fail('bad nextConflictId');
   state.nextConflictId = /** @type {number} */ (data.nextConflictId);
   return state;
@@ -205,54 +221,21 @@ export function parseState(raw) {
 // --- Helpers ----------------------------------------------------------------
 
 /**
+ * Closes open conflicts on `field` that refer to any of `values`: the user
+ * has replaced or removed the value they were about.
  * @param {State} state
  * @param {FieldName} field
- * @param {string} newInformation
- * @param {string} evidence
- * @param {ProfileChange | null} proposed
- * @param {Date} now
+ * @param {string[]} values
+ * @param {string} message
  * @returns {Transition}
  */
-function recordConflict(state, field, newInformation, evidence, proposed, now) {
-  const label = PROFILE_FIELDS[field].label;
-  const stored = describe(state.profile[field]);
-  const duplicate = state.conflicts.find((c) => c.field === field && sameText(c.newInformation, newInformation));
-  if (duplicate) {
-    return {
-      state,
-      outcome: {
-        kind: 'conflict',
-        message: `Not applied: this is already open as conflict ${duplicate.id}. Ask the user how to resolve it.`,
-        conflict: duplicate,
-      },
-    };
-  }
-
-  /** @type {Conflict} */
-  const conflict = {
-    id: `c${state.nextConflictId}`,
-    field,
-    existing: state.profile[field].map((v) => v.value),
-    newInformation: normalizeText(newInformation),
-    evidence,
-    proposed,
-    createdAt: now.toISOString(),
-  };
-  const next = { ...state, conflicts: [...state.conflicts, conflict], nextConflictId: state.nextConflictId + 1 };
-  const nextStep = `Ask the user which is right, then resolve conflict ${conflict.id}.`;
+function closeConflictsAbout(state, field, values, message) {
+  const moot = state.conflicts.filter((c) => c.field === field && c.existing.some((e) => values.some((v) => sameText(e, v))));
+  if (moot.length === 0) return { state, outcome: { kind: 'applied', message } };
+  const ids = moot.map((c) => c.id).join(', ');
   return {
-    state: next,
-    outcome: proposed
-      ? {
-          kind: 'conflict',
-          message: `Not applied: ${label} is currently ${stored}, and the requested change (${conflict.newInformation}) would overwrite it. It is open as conflict ${conflict.id}. ${nextStep}`,
-          conflict,
-        }
-      : {
-          kind: 'reported',
-          message: `Recorded conflict ${conflict.id}: ${label} is currently ${stored}, which contradicts this new information: ${conflict.newInformation}. The stored value is unchanged. ${nextStep}`,
-          conflict,
-        },
+    state: { ...state, conflicts: state.conflicts.filter((c) => !moot.includes(c)) },
+    outcome: { kind: 'applied', message: `${message} Closed conflict${moot.length > 1 ? 's' : ''} ${ids}, which referred to the old value.` },
   };
 }
 
@@ -278,7 +261,12 @@ function invalid(state, message) {
 
 /** @param {ProfileValue[]} values */
 function describe(values) {
-  return values.length === 0 ? 'empty' : values.map((v) => `"${v.value}"`).join(', ');
+  return values.length === 0 ? 'empty' : quoteAll(values.map((v) => v.value));
+}
+
+/** @param {string[]} values */
+function quoteAll(values) {
+  return values.map((v) => `"${v}"`).join(', ');
 }
 
 /** @param {string[]} values */

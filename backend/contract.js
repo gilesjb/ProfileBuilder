@@ -37,11 +37,10 @@ export const OPS_BY_KIND = /** @type {const} */ ({
 /**
  * How a conflict can be resolved:
  * - keep: discard the new information; the stored value stands.
- * - accept: apply the change that caused the conflict (structural conflicts only).
  * - replace: set the field to the submitted value(s).
- * @typedef {'keep' | 'accept' | 'replace'} Resolution
+ * @typedef {'keep' | 'replace'} Resolution
  */
-export const RESOLUTIONS = /** @type {const} */ (['keep', 'accept', 'replace']);
+export const RESOLUTIONS = /** @type {const} */ (['keep', 'replace']);
 
 export const LIMITS = Object.freeze({
   textLength: 200,
@@ -72,7 +71,7 @@ export const AGENT_CLIENT = 'agent';
 /**
  * What a write did. Every write response carries one in its #result section,
  * and the HTTP status is derived from it.
- * @typedef {'applied' | 'unchanged' | 'conflict' | 'reported' | 'resolved'
+ * @typedef {'applied' | 'unchanged' | 'reported' | 'resolved'
  *   | 'reset' | 'invalid' | 'not-found' | 'forbidden'} OutcomeKind
  */
 export const STATUS_BY_OUTCOME = Object.freeze({
@@ -83,7 +82,6 @@ export const STATUS_BY_OUTCOME = Object.freeze({
   reported: 201,
   forbidden: 403,
   'not-found': 404,
-  conflict: 409,
   invalid: 422,
 });
 

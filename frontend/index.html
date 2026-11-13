@@ -538,8 +538,7 @@ class ContractError extends Error {}
 
 /**
  * @typedef {{ name: string, label: string, kind: 'list' | 'single', values: string[] }} Field
- * @typedef {{ id: string, field: string, existing: string[], newInformation: string,
- *             proposed: { op: string, value: string } | null }} Conflict
+ * @typedef {{ id: string, field: string, existing: string[], newInformation: string }} Conflict
  * @typedef {{ outcome: string, message: string }} Result
  * @typedef {{ fields: Field[], conflicts: Conflict[], result: Result | null }} ProfileModel
  */
@@ -589,12 +588,7 @@ function parseConflict(article) {
   if (!newInformation) throw new ContractError(`conflict ${id} has no new information`);
 
   const existing = [...article.querySelectorAll('[data-role="existing"]')].map((d) => d.getAttribute('value'));
-  const proposedEl = article.querySelector('[data-role="proposed"]');
-  const proposed = proposedEl
-    ? { op: proposedEl.getAttribute('data-op'), value: proposedEl.getAttribute('data-value') }
-    : null;
-
-  return { id, field, existing, newInformation, proposed };
+  return { id, field, existing, newInformation };
 }
 
 /** @param {Element} main @returns {Result | null} */
@@ -1256,7 +1250,7 @@ function ToolCall({ call }) {
 
 /** @param {number | undefined} status @param {string | null | undefined} outcome */
 function toneOf(status, outcome) {
-  if (outcome === 'conflict' || outcome === 'reported' || outcome === 'not-found') return 'warn';
+  if (outcome === 'reported' || outcome === 'not-found') return 'warn';
   if (!status || status >= 400) return 'error';
   return outcome === 'unchanged' ? 'neutral' : 'ok';
 }

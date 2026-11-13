@@ -38,21 +38,27 @@ describe('profile service over HTTP', () => {
     assert.match(await res.text(), /<section id="profile">/);
   });
 
-  it('applies a change, then answers a contradicting change with 409 and keeps the value', async () => {
+  it('applies changes the agent submits, and keeps reported conflicts until resolved', async () => {
     const set = await post('/profile', { field: 'homeBase', op: 'set', value: 'Boston', evidence: 'I live in Boston' });
     assert.equal(set.status, 200);
     assert.equal(outcomeOf(await set.text()), 'applied');
 
-    const contradict = await post('/profile', { field: 'homeBase', op: 'set', value: 'Chicago', evidence: 'from Chicago' });
-    assert.equal(contradict.status, 409);
-    const html = await contradict.text();
-    assert.equal(outcomeOf(html), 'conflict');
+    const report = await post('/profile/conflicts', {
+      field: 'homeBase',
+      newInformation: 'mentioned their place in Chicago',
+      evidence: 'back at my place in Chicago',
+    });
+    assert.equal(report.status, 201);
+    const html = await report.text();
+    assert.equal(outcomeOf(html), 'reported');
     assert.match(html, /<dd data-field="homeBase" data-kind="single"><ul>\n<li><data value="Boston">/);
     assert.match(html, /<article id="conflict-c1" data-conflict="c1" data-field="homeBase">/);
 
-    const resolve = await post('/profile/conflicts/c1', { resolution: 'accept' });
+    const resolve = await post('/profile/conflicts/c1', { resolution: 'replace', value: 'Chicago' });
     assert.equal(resolve.status, 200);
-    assert.match(await resolve.text(), /<data value="Chicago">/);
+    const resolved = await resolve.text();
+    assert.match(resolved, /<data value="Chicago">/);
+    assert.match(resolved, /No open conflicts/);
   });
 
   it('rejects invalid input with 422 and lists the errors', async () => {
@@ -72,14 +78,7 @@ describe('profile service over HTTP', () => {
     assert.equal(res.status, 415);
   });
 
-  it('returns 201 for a reported conflict and 404 for an unknown one', async () => {
-    await post('/profile', { field: 'dietaryRestrictions', op: 'add', value: 'vegetarian', evidence: "I'm vegetarian" });
-    const report = await post('/profile/conflicts', {
-      field: 'dietaryRestrictions',
-      newInformation: 'wants a steakhouse',
-      evidence: 'a great steakhouse',
-    });
-    assert.equal(report.status, 201);
+  it('returns 404 for an unknown conflict', async () => {
     assert.equal((await post('/profile/conflicts/c99', { resolution: 'keep' })).status, 404);
   });
 

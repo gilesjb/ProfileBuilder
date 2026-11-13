@@ -12,7 +12,7 @@
  *   when they have no value, [data-empty].
  * - Machine-readable values are <data value="…">; the text is for humans.
  * - Conflicts are <article data-conflict="{id}" data-field="{field}">, with
- *   parts marked by [data-role]: existing, new-information, evidence, proposed.
+ *   parts marked by [data-role]: existing, new-information, evidence.
  * - Forms define writes: their action and input names are the request
  *   contract (see contract.js).
  * - Pages served to the agent (X-Client: agent) omit forms it may not use.
@@ -194,17 +194,13 @@ function renderConflict(c) {
   const existing = c.existing.length
     ? c.existing.map((v) => `<data data-role="existing" value="${esc(v)}">${esc(v)}</data>`).join(', ')
     : 'nothing';
-  const proposed = c.proposed
-    ? `\n<p data-role="proposed" data-op="${c.proposed.op}" data-value="${esc(c.proposed.value)}">Proposed change: ${esc(c.newInformation)}. Resolve with accept to apply it.</p>`
-    : '';
-  const resolutions = RESOLUTIONS.filter((r) => r !== 'accept' || c.proposed);
   return `<article id="conflict-${esc(c.id)}" data-conflict="${esc(c.id)}" data-field="${c.field}">
 <h3>Conflict ${esc(c.id)}: ${esc(label)}</h3>
 <p>Stored: ${existing}</p>
 <p>New information: <q data-role="new-information">${esc(c.newInformation)}</q></p>
-<p>User said: <q data-role="evidence">${esc(c.evidence)}</q></p>${proposed}
+<p>User said: <q data-role="evidence">${esc(c.evidence)}</q></p>
 <form method="post" action="${ROUTES.conflict(esc(c.id))}">
-<p><label>Resolution ${select('resolution', resolutions.map((r) => [r, r]))}</label></p>
+<p><label>Resolution ${select('resolution', RESOLUTIONS.map((r) => [r, r]))}</label></p>
 <p><label>Value(s) for replace, one per line<br><textarea name="value" rows="2" cols="40"></textarea></label></p>
 <p><label>User said <input name="evidence" size="40"></label></p>
 <p><button type="submit">Resolve ${esc(c.id)}</button></p>

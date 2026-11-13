@@ -45,14 +45,25 @@ describe('applyChange', () => {
     assert.deepEqual(state.profile.homeBase.map((v) => v.value), ['Boston']);
   });
 
-  it('records a conflict instead of overwriting a single field (CONF-2)', () => {
+  it('replaces a single field: deciding whether that is a contradiction is the LLM\'s job', () => {
     const start = apply(emptyState(), { field: 'homeBase', op: 'set', value: 'Boston' }).state;
     const { state, outcome } = apply(start, { field: 'homeBase', op: 'set', value: 'Chicago' });
-    assert.equal(outcome.kind, 'conflict');
-    assert.deepEqual(state.profile.homeBase.map((v) => v.value), ['Boston']);
-    assert.equal(state.conflicts.length, 1);
-    assert.deepEqual(state.conflicts[0].existing, ['Boston']);
-    assert.equal(state.conflicts[0].proposed?.value, 'Chicago');
+    assert.equal(outcome.kind, 'applied');
+    assert.match(outcome.message, /from "Boston" to "Chicago"/);
+    assert.deepEqual(state.profile.homeBase.map((v) => v.value), ['Chicago']);
+    assert.equal(state.conflicts.length, 0);
+  });
+
+  it('closes conflicts about a value the user has replaced', () => {
+    const start = apply(emptyState(), { field: 'passportCountry', op: 'set', value: 'US' }).state;
+    const withConflict = reportConflict(
+      start,
+      { field: 'passportCountry', newInformation: 'mentioned a Canadian passport', evidence: 'my Canadian passport' },
+      now,
+    ).state;
+    const { state, outcome } = apply(withConflict, { field: 'passportCountry', op: 'set', value: 'Canada' });
+    assert.match(outcome.message, /Closed conflict c1/);
+    assert.equal(state.conflicts.length, 0);
   });
 
   it('removes a stored value without recording a conflict', () => {
@@ -87,13 +98,6 @@ describe('applyChange', () => {
     assert.equal(state, start);
   });
 
-  it('does not record the same conflict twice', () => {
-    const start = apply(emptyState(), { field: 'homeBase', op: 'set', value: 'Boston' }).state;
-    const once = apply(start, { field: 'homeBase', op: 'set', value: 'Chicago' }).state;
-    const twice = apply(once, { field: 'homeBase', op: 'set', value: 'chicago' });
-    assert.equal(twice.outcome.kind, 'conflict');
-    assert.equal(twice.state, once);
-  });
 });
 
 describe('reportConflict', () => {
@@ -102,9 +106,15 @@ describe('reportConflict', () => {
   it('records a semantic conflict without changing the value (UC-21)', () => {
     const { state, outcome } = reportConflict(vegetarian(), report, now);
     assert.equal(outcome.kind, 'reported');
-    assert.equal(state.conflicts[0].proposed, null);
     assert.deepEqual(state.conflicts[0].existing, ['vegetarian']);
     assert.deepEqual(state.profile.dietaryRestrictions.map((v) => v.value), ['vegetarian']);
+  });
+
+  it('does not record the same conflict twice, so a retried turn is harmless', () => {
+    const once = reportConflict(vegetarian(), report, now).state;
+    const twice = reportConflict(once, { ...report, newInformation: '  Wants a  steakhouse ' }, now);
+    assert.equal(twice.outcome.kind, 'unchanged');
+    assert.equal(twice.state, once);
   });
 
   it('rejects a conflict against an empty field', () => {
@@ -139,22 +149,13 @@ describe('resolveConflict', () => {
     assert.deepEqual(state.profile.dietaryRestrictions, []);
   });
 
-  it('accept is rejected for a conflict with no proposed change', () => {
-    const { outcome } = resolveSteakhouse('accept');
-    assert.equal(outcome.kind, 'invalid');
-  });
-
-  it('accept applies the proposed change', () => {
-    const start = apply(emptyState(), { field: 'homeBase', op: 'set', value: 'Boston' }).state;
-    const withConflict = apply(start, { field: 'homeBase', op: 'set', value: 'Chicago' }).state;
-    const { state } = resolveConflict(withConflict, 'c1', { resolution: 'accept', values: [], evidence: '' }, now);
-    assert.deepEqual(state.profile.homeBase.map((v) => v.value), ['Chicago']);
-    assert.equal(state.conflicts.length, 0);
-  });
-
   it('replace on a single field rejects more than one value', () => {
     const start = apply(emptyState(), { field: 'homeBase', op: 'set', value: 'Boston' }).state;
-    const withConflict = apply(start, { field: 'homeBase', op: 'set', value: 'Chicago' }).state;
+    const withConflict = reportConflict(
+      start,
+      { field: 'homeBase', newInformation: 'said they live in Chicago', evidence: 'here in Chicago' },
+      now,
+    ).state;
     const { state, outcome } = resolveConflict(
       withConflict,
       'c1',
@@ -179,6 +180,13 @@ describe('parseState', () => {
       now,
     ).state;
     assert.deepEqual(parseState(JSON.parse(JSON.stringify(state))), state);
+  });
+
+  it('drops properties left over from older versions', () => {
+    const state = reportConflict(vegetarian(), { field: 'dietaryRestrictions', newInformation: 'steak', evidence: 'steak' }, now).state;
+    const stored = JSON.parse(JSON.stringify(state));
+    stored.conflicts[0].proposed = null;
+    assert.deepEqual(parseState(stored), state);
   });
 
   it('rejects malformed data', () => {

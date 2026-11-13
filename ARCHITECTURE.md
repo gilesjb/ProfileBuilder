@@ -81,9 +81,9 @@ Each stored value records the user's words that justified it (`evidence`) and wh
 |---|---|---|
 | `GET /` | Entry point with links to the profile and destinations | 200 |
 | `GET /profile` | The current profile and open conflicts, plus the forms for changing them | 200 |
-| `POST /profile` | Apply one change: `field`, `op` (`add`, `remove` or `set`), `value`, `evidence` | 200 applied · 409 conflict recorded · 422 invalid |
-| `POST /profile/conflicts` | Report a semantic contradiction: `field`, `newInformation`, `evidence` | 201 · 422 |
-| `POST /profile/conflicts/{id}` | Resolve a conflict: `resolution` (`keep`, `accept` or `replace`); `value` (repeatable, or one per line) for `replace`; optional `evidence` | 200 · 404 · 422 |
+| `POST /profile` | Apply one change: `field`, `op` (`add`, `remove` or `set`), `value`, `evidence` | 200 applied or unchanged · 422 invalid |
+| `POST /profile/conflicts` | Report a semantic contradiction: `field`, `newInformation`, `evidence` | 201 reported · 200 already open · 422 |
+| `POST /profile/conflicts/{id}` | Resolve a conflict: `resolution` (`keep` or `replace`); `value` (repeatable, or one per line) for `replace`; optional `evidence` | 200 · 404 · 422 |
 | `POST /profile/reset` | Clear the profile and conflicts (for testing and demos). Refused for the agent. | 200 · 403 agent |
 | `GET /destinations` | List the known destinations, with a lookup form | 200 |
 | `GET /destinations?name=…` | `getDestinationInfo(name)`. Matching ignores case, accents and extra whitespace, and accepts a few aliases (e.g. Lisboa, CDMX). | 200 found · 404 not found · 422 empty name |
@@ -94,25 +94,29 @@ Every write responds with the updated profile page plus a **result section** say
 
 For list fields `op` is `add` or `remove`; for single-value fields it is `set` or `remove`. Writes must be `application/x-www-form-urlencoded` (anything else gets a 415, and bodies over 16 KB get a 413). Unknown paths get a 404 and wrong methods a 405, each with an HTML error page.
 
-### 3.4 Conflict rules (`profile.js`)
+### 3.4 Conflicts (`profile.js`)
 
-Conflict handling lives in one module and has two detection paths that feed a single conflict store:
+**The LLM detects conflicts and the backend keeps them.** Only the model can tell that "wants a steakhouse" contradicts "vegetarian", or that a new home city is a move rather than a mistake. So the backend makes no judgment about contradictions. It applies every change submitted to it and records the contradictions the model reports.
 
-1. **Structural (deterministic, in the backend).**
-   - `add` to a list: applied. Adding is never a conflict (UC-10).
-   - `set` on an empty single-value field: applied.
-   - `remove` of a stored value: applied. A removal is the user retracting a preference, not new information contradicting it. Treating removals as conflicts made "clear my preferences" produce one conflict per value. Open conflicts that depended on the removed value are closed, since nothing is left to contradict.
-   - `set` that differs from the stored value: **not applied**. A conflict is recorded holding the existing value, the proposed change and the evidence. Response: 409.
-   - Repeating a change that is already an open conflict returns that conflict rather than creating a duplicate.
-2. **Semantic (LLM-reported).** The backend can't know that "steakhouse" contradicts "vegetarian". The LLM reports that kind of contradiction through `POST /profile/conflicts`. It is stored and shown exactly like a structural conflict, but has no proposed change. Reporting a conflict against an empty field is rejected (422), since nothing is contradicted.
+We first had the backend detect "structural" conflicts itself, treating any `remove`, or a `set` that differed from the stored value, as a conflict. That was a poor proxy. "Clear my preferences" produced one conflict per value. "I've moved to Chicago" was flagged, even though it's an update, not a contradiction. In both cases the agent knows whether the user *stated* a change or it is *inferring* one, and the backend can't tell the difference.
 
-Resolution:
+Changes (`POST /profile`):
+- `add` to a list: applied. Adding is never a conflict (UC-10).
+- `set` on a single-value field: replaces the stored value.
+- `remove`: deletes the value.
+- When a `set` or `remove` replaces or deletes a value, open conflicts about that value are closed, because the user has now said what's true.
+
+Conflicts (`POST /profile/conflicts`):
+- The agent reports a contradiction between a stored value and something the user said. The stored value is left unchanged (CONF-2), and the conflict is saved with a snapshot of the stored values, the new information and the user's words.
+- Reporting the same contradiction again returns the open conflict without creating a duplicate, so a retried turn is harmless.
+- Reporting against an empty field is rejected (422), since nothing is contradicted.
+
+Resolution (`POST /profile/conflicts/{id}`):
 - `keep` closes the conflict and leaves the value as it is.
-- `accept` applies the change that caused a structural conflict and closes it. It is rejected for semantic conflicts, which have no change to apply.
 - `replace` sets the field to the submitted value(s), possibly none, and closes the conflict.
 - A clarification ("the steakhouse is for my partner") becomes `keep` plus a separate `add` to another field.
 
-Explicit corrections (CONF-6) are handled for list fields: "actually I prefer trains" becomes a `remove` and an `add`, with no conflict. For single-value fields they still go through the conflict path, which UC-27 allows. The guide tells the agent to remove values only when the user explicitly retracts them. A mere hint (the steakhouse) is reported as a conflict instead.
+**The trade-off.** CONF-2 ("never silently overwrite") now depends on the model following the guide: change a value only when the user says so, otherwise report a conflict. There is no backend safety net if the model wrongly treats a hint as a statement. Mistakes are still visible, though. Every change appears in the chat as a tool call, with the user's quoted words stored as evidence.
 
 ### 3.5 Persistence (`store.js`)
 
@@ -127,21 +131,22 @@ Explicit corrections (CONF-6) are handled for list fields: "actually I prefer tr
 
 - **Everything a consumer needs is inside `<main>`.** The `<nav>` is for people browsing the service. The frontend passes only `<main>` to the LLM, to save tokens.
 - **Stable `id`s** identify sections and forms: `#result`, `#profile`, `#conflicts`, `#destination`, `#update-profile`, `#report-conflict`, `#reset-profile`, `#lookup-destination`.
-- **`#result[data-outcome]`** says what a request did: `applied`, `unchanged`, `conflict`, `reported`, `resolved`, `reset`, `invalid`, `not-found`, `found` or `error`.
+- **`#result[data-outcome]`** says what a request did: `applied`, `unchanged`, `reported`, `resolved`, `forbidden`, `reset`, `invalid`, `not-found`, `found` or `error`.
 - **`[data-field]`** marks a field. Profile fields also carry `data-kind` (`list` or `single`) and, when empty, `data-empty`.
 - **`<data value="…">`** holds machine-readable values. Its text content is the human-readable form.
-- **Conflicts** are `<article data-conflict="{id}" data-field="{field}">`, with their parts marked by `data-role`: `existing`, `new-information`, `evidence`, `proposed`.
+- **Conflicts** are `<article data-conflict="{id}" data-field="{field}">`, with their parts marked by `data-role`: `existing`, `new-information`, `evidence`.
 - **Forms define the writes.** The `action` attribute and the input `name`s are the request contract.
 
 We chose `data-*` attributes over microdata because they map directly onto `querySelector` and don't need microdata's nested-scope rules.
 
-Illustrative fragment (a response to a contradicting change):
+Illustrative fragment (the response to a reported conflict):
 
 ```html
 <main>
-<section id="result" data-outcome="conflict">
-<p>Not applied: Home base is currently "Boston", and the requested change (change to "Chicago")
-would overwrite it. It is open as conflict c1. Ask the user which is right, then resolve conflict c1.</p>
+<section id="result" data-outcome="reported">
+<p>Recorded conflict c1: Dietary restrictions is currently "vegetarian", which contradicts this new
+information: wants to book a famous steakhouse. The stored value is unchanged. Ask the user which is
+right, then resolve conflict c1.</p>
 </section>
 <section id="profile">
 <h1>Travel profile</h1>
@@ -150,21 +155,20 @@ would overwrite it. It is open as conflict c1. Ask the user which is right, then
 <dd data-field="interests" data-kind="list"><ul>
 <li><data value="hiking">hiking</data> <small>(user said: <q>I love hiking</q>)</small></li>
 </ul></dd>
-<dt>Home base</dt>
-<dd data-field="homeBase" data-kind="single"><ul>
-<li><data value="Boston">Boston</data> <small>(user said: <q>I live in Boston</q>)</small></li>
+<dt>Dietary restrictions</dt>
+<dd data-field="dietaryRestrictions" data-kind="list"><ul>
+<li><data value="vegetarian">vegetarian</data> <small>(user said: <q>I'm vegetarian</q>)</small></li>
 </ul></dd>
 …
 </dl>
 </section>
 <section id="conflicts">
 <h2>Open conflicts</h2>
-<article id="conflict-c1" data-conflict="c1" data-field="homeBase">
-<h3>Conflict c1: Home base</h3>
-<p>Stored: <data data-role="existing" value="Boston">Boston</data></p>
-<p>New information: <q data-role="new-information">change to "Chicago"</q></p>
-<p>User said: <q data-role="evidence">I just moved to Chicago</q></p>
-<p data-role="proposed" data-op="set" data-value="Chicago">Proposed change: … Resolve with accept to apply it.</p>
+<article id="conflict-c1" data-conflict="c1" data-field="dietaryRestrictions">
+<h3>Conflict c1: Dietary restrictions</h3>
+<p>Stored: <data data-role="existing" value="vegetarian">vegetarian</data></p>
+<p>New information: <q data-role="new-information">wants to book a famous steakhouse</q></p>
+<p>User said: <q data-role="evidence">we have to try that famous steakhouse</q></p>
 <form method="post" action="/profile/conflicts/c1">…</form>
 </article>
 </section>
@@ -203,7 +207,7 @@ The model gets two generic tools. It uses the service the way a person uses it i
 - **The HTML says what is possible.** The links and forms on each page tell the model what it can do, so the frontend holds no knowledge of profiles, conflicts or destinations. Backend capabilities can change without touching the tool definitions.
 - **Arguments are paths, never URLs.** The frontend resolves them against `BACKEND_URL` and refuses anything that would leave the service (absolute URLs, `//host`, backslash tricks) before any request is made.
 - **Each call carries `X-Client: agent`**, so the backend applies agent policy (§3.3).
-- **Tool results** are `HTTP {status}` plus the response's `<main>` HTML. The model can tell found, conflict, not-found and invalid apart from the status and `#result[data-outcome]`. Bad arguments and network failures come back as `Error: …` text the model can act on.
+- **Tool results** are `HTTP {status}` plus the response's `<main>` HTML. The model can tell found, reported, not-found and invalid apart from the status and `#result[data-outcome]`. Bad arguments and network failures come back as `Error: …` text the model can act on.
 - **`getDestinationInfo`.** The assignment's function is not a tool name. Every `GET /destinations?name=…` calls `getDestinationInfo()` in the backend, and each lookup shows in the chat and the logs.
 
 ### 5.3 A conversation turn
@@ -252,6 +256,6 @@ npm test                    # targeted tests (node:test)
 - **An HTML contract instead of JSON.** One representation works for a person in a browser, for the UI, and for the LLM, which removes any gap between what the model sees and what the user sees. The cost is that parsing is less direct than `JSON.parse`, and the markup needs discipline. This is mitigated by keeping all the markup in `html.js` and all the parsing in one frontend parser.
 - **The API key lives in the browser.** Fine for a local, single-user tool, with nothing secret in the repo or the backend. A real product would route model calls through a server.
 - **Native tool calling depends on the model.** Free OpenRouter models are inconsistent at calling tools, and the model may skip `getDestinationInfo`. Mitigations: strict prompt rules, validating tool arguments, and a recommended default model known to call tools reliably. Possible extra safeguard: the app spots known destination names in the user's message and pre-fetches them.
-- **Semantic conflict detection depends on the LLM.** Structural conflicts are deterministic. Semantic ones depend on the model noticing them, which is why the current profile is in every system prompt.
+- **Conflict detection depends on the LLM.** The backend records conflicts but doesn't detect them (§3.4). Detection depends on the model reading `/profile` before it changes anything, which the guide requires at the start of every turn.
 - **CDN dependencies at runtime.** React and `htm` load from esm.sh at pinned versions. The frontend needs network access for OpenRouter anyway.
 - **No styling on backend pages.** On purpose: they are a data interface. All presentation is in the frontend.
