@@ -217,7 +217,7 @@
   .chat-empty h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
   .chat-empty p { margin: 0; color: var(--text-muted); }
 
-  .message { display: flex; flex-direction: column; max-width: 72ch; }
+  .message { display: flex; flex-direction: column; gap: 6px; max-width: 72ch; }
   .message.user { align-self: flex-end; align-items: flex-end; }
   .message.assistant { align-self: flex-start; }
 
@@ -262,10 +262,37 @@
   .typing span:nth-child(3) { animation-delay: 0.3s; }
   @keyframes bounce { 0%, 60%, 100% { transform: none; opacity: 0.5; } 30% { transform: translateY(-4px); opacity: 1; } }
 
-  .message-note { margin-top: 4px; font-size: 12px; color: var(--text-faint); }
+  .message-note { font-size: 12px; color: var(--text-faint); }
+  .tool-call {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 8px;
+    max-width: 100%;
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--text-muted);
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .tool-name { color: var(--text); font-weight: 600; }
+  .tool-fields { overflow-wrap: anywhere; color: var(--text-faint); }
+  .tool-result {
+    margin-left: auto;
+    padding: 0 8px;
+    border-radius: 99px;
+    background: var(--surface-muted);
+    white-space: nowrap;
+  }
+  .tool-call.ok .tool-result { background: var(--accent-soft); color: var(--accent); }
+  .tool-call.warn .tool-result { background: var(--warn-soft); color: var(--warn); }
+  .tool-call.error .tool-result { background: var(--danger-soft); color: var(--danger); }
+  .tool-call.running .tool-result { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.45; } }
+
 
   .message-error {
-    margin-top: 6px;
     padding: 10px 14px;
     border-radius: var(--radius-md);
     background: var(--danger-soft);
@@ -493,8 +520,11 @@ const BACKEND_URL = 'http://localhost:3000';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_MODEL = 'anthropic/claude-haiku-5.5';
 const STORAGE_KEYS = { apiKey: 'profileBuilder.openRouterKey', model: 'profileBuilder.model' };
+const MAX_TOOL_ROUNDS = 8;
+/** Marks requests made by the agent's tools, so the backend can apply agent policy. */
+const AGENT_HEADER = { name: 'X-Client', value: 'agent' };
 
-/** One JSON line per LLM call (and later, tool call). */
+/** One JSON line per LLM call and tool call. */
 function logEvent(event) {
   console.info(JSON.stringify({ time: new Date().toISOString(), ...event }));
 }
@@ -593,11 +623,182 @@ async function fetchProfile() {
   return parseProfilePage(await response.text());
 }
 
+/**
+ * A request made on the agent's behalf, marked with X-Client: agent so the
+ * backend can apply agent policy. Returns the page's <main> HTML (what the
+ * model sees), its #result outcome, and the parsed profile if the page has
+ * one (what the panel sees).
+ * @param {{ method: 'GET' | 'POST', path: string, fields?: Record<string, string | string[]>, signal?: AbortSignal }} request
+ * @returns {Promise<{ status: number, main: string, outcome: string | null, profile: ProfileModel | null }>}
+ */
+async function agentRequest({ method, path, fields, signal }) {
+  const init = { method, headers: { [AGENT_HEADER.name]: AGENT_HEADER.value }, cache: 'no-store', signal };
+  if (method === 'POST') init.body = toFormBody(fields ?? {});
+  let response;
+  try {
+    response = await fetch(backendUrl(path), init);
+  } catch (error) {
+    if (signal?.aborted || error instanceof ToolInputError) throw error;
+    throw new BackendUnreachableError(`Can't reach the profile service at ${BACKEND_URL}.`);
+  }
+  const text = await response.text();
+  const main = new DOMParser().parseFromString(text, 'text/html').querySelector('main');
+  let profile = null;
+  if (main?.querySelector('section#profile')) {
+    try {
+      profile = parseProfilePage(text);
+    } catch (error) {
+      logEvent({ event: 'contract.error', path, error: String(error) });
+    }
+  }
+  return {
+    status: response.status,
+    main: main ? main.innerHTML.trim() : text.trim(),
+    outcome: main?.querySelector('section#result')?.getAttribute('data-outcome') ?? null,
+    profile,
+  };
+}
+
+/** Resolves a model-supplied path against the backend; anything else is refused. */
+function backendUrl(path) {
+  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
+    throw new ToolInputError(`path must be a path on the profile service starting with "/", got ${JSON.stringify(path)}.`);
+  }
+  const url = new URL(path, BACKEND_URL);
+  if (url.origin !== new URL(BACKEND_URL).origin) {
+    throw new ToolInputError(`path must stay on the profile service, got ${JSON.stringify(path)}.`);
+  }
+  return url;
+}
+
+/** @param {Record<string, string | string[]>} fields */
+function toFormBody(fields) {
+  const body = new URLSearchParams();
+  for (const [name, value] of Object.entries(fields)) {
+    for (const v of [value].flat()) body.append(name, String(v));
+  }
+  return body;
+}
+
+// --- Agent tools ------------------------------------------------------------
+// Two generic tools. The profile service's HTML tells the model what it can
+// do (links and forms), and the service's home page holds the rules it must
+// follow, so nothing here knows about profiles or destinations.
+
+class ToolInputError extends Error {}
+
+const TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'getPage',
+      description:
+        'Fetch a page from the profile service. Returns the HTTP status and the page\'s <main> HTML. Use it to read the profile, follow links, and look up destinations (for a method="get" form, put its inputs in the query string).',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'A path on the profile service starting with "/", e.g. "/profile" or "/destinations?name=Lisbon".',
+          },
+        },
+        required: ['path'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'submitForm',
+      description:
+        'Submit a method="post" form from a page you have read. Returns the HTTP status and the <main> HTML of the response; its #result section says what happened.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', description: 'The form\'s action path, e.g. "/profile".' },
+          fields: {
+            type: 'object',
+            description: 'Input names mapped to values. Use an array for an input with several values.',
+            additionalProperties: { anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+          },
+        },
+        required: ['action', 'fields'],
+        additionalProperties: false,
+      },
+    },
+  },
+];
+
+/**
+ * What a tool call asks for, as far as it can be read from its arguments.
+ * Used both to run the call and to show it in the chat.
+ * @param {{ name: string, arguments: string }} call
+ */
+function describeToolCall(call) {
+  let args;
+  try {
+    args = JSON.parse(call.arguments || '{}');
+  } catch {
+    return { error: 'arguments were not valid JSON' };
+  }
+  if (call.name === 'getPage') return { method: 'GET', path: args.path };
+  if (call.name === 'submitForm') {
+    const fields = args.fields;
+    if (typeof fields !== 'object' || fields === null || Array.isArray(fields)) {
+      return { method: 'POST', path: args.action, error: 'fields must be an object' };
+    }
+    return { method: 'POST', path: args.action, fields };
+  }
+  return { error: `unknown tool ${call.name}` };
+}
+
+/**
+ * Runs one tool call against the backend. Never throws for bad input or a
+ * failed request: the model gets an error message it can act on. Throws
+ * only if the turn was aborted.
+ */
+async function runToolCall(call, signal) {
+  const request = describeToolCall(call);
+  const started = performance.now();
+  const log = (extra) =>
+    logEvent({ event: 'tool.call', tool: call.name, method: request.method, path: request.path, latencyMs: Math.round(performance.now() - started), ...extra });
+
+  if (request.error) {
+    log({ error: request.error });
+    return { content: `Error: ${request.error}.`, result: { error: request.error }, profile: null };
+  }
+  try {
+    const response = await agentRequest({ ...request, signal });
+    log({ status: response.status, outcome: response.outcome });
+    return {
+      content: `HTTP ${response.status}\n\n${response.main}`,
+      result: { status: response.status, outcome: response.outcome },
+      profile: response.profile,
+    };
+  } catch (error) {
+    if (signal.aborted) throw error;
+    const message = error instanceof ToolInputError || error instanceof BackendUnreachableError ? error.message : String(error);
+    log({ error: message });
+    return { content: `Error: ${message}`, result: { error: message }, profile: null };
+  }
+}
+
+/** The system prompt is the service's home page, which carries the rules. */
+function systemPrompt(homeHtml) {
+  return `You are the assistant in Profile Builder. You work with the traveler's profile through the profile service, using the getPage and submitForm tools. The service's home page is below. It describes what the service offers and the instructions you must follow.
+
+<page path="/">
+${homeHtml}
+</page>`;
+}
+
 // --- OpenRouter client ------------------------------------------------------
 
 /**
- * A failed model call, classified so the UI can say what to do about it.
- * @typedef {'invalid-key' | 'no-credits' | 'rate-limited' | 'rejected' | 'unavailable' | 'interrupted'} LlmErrorKind
+ * A failed turn, classified so the UI can say what to do about it.
+ * @typedef {'invalid-key' | 'no-credits' | 'rate-limited' | 'rejected' | 'unavailable' | 'interrupted'
+ *   | 'service-unreachable'} LlmErrorKind
  */
 class LlmError extends Error {
   /** @param {LlmErrorKind} kind @param {string} message @param {{ status?: number, detail?: string }} [info] */
@@ -612,10 +813,11 @@ class LlmError extends Error {
 /**
  * Streams a chat completion from OpenRouter as server-sent events.
  * Yields { type: 'text', text } as tokens arrive, then one
- * { type: 'done', id, usage, finishReason }. Throws LlmError on failure, or
- * the fetch AbortError if `signal` is aborted.
+ * { type: 'done', id, usage, finishReason, toolCalls }. Tool calls arrive in
+ * fragments and are assembled here. Throws LlmError on failure, or the fetch
+ * AbortError if `signal` is aborted.
  */
-async function* streamChatCompletion({ apiKey, model, messages, signal }) {
+async function* streamChatCompletion({ apiKey, model, messages, tools, signal }) {
   let response;
   try {
     response = await fetch(OPENROUTER_URL, {
@@ -625,7 +827,7 @@ async function* streamChatCompletion({ apiKey, model, messages, signal }) {
         'Content-Type': 'application/json',
         'X-Title': 'Profile Builder',
       },
-      body: JSON.stringify({ model, messages, stream: true, usage: { include: true } }),
+      body: JSON.stringify({ model, messages, tools, stream: true, usage: { include: true } }),
       signal,
     });
   } catch (error) {
@@ -640,6 +842,8 @@ async function* streamChatCompletion({ apiKey, model, messages, signal }) {
   let usage = null;
   let finishReason = null;
   let sawDone = false;
+  /** @type {Array<{ id: string, name: string, arguments: string }>} */
+  const toolCalls = [];
   try {
     while (!sawDone) {
       const { value, done } = await reader.read();
@@ -671,6 +875,12 @@ async function* streamChatCompletion({ apiKey, model, messages, signal }) {
         const choice = chunk.choices?.[0];
         finishReason = choice?.finish_reason ?? finishReason;
         if (choice?.delta?.content) yield { type: 'text', text: choice.delta.content };
+        for (const fragment of choice?.delta?.tool_calls ?? []) {
+          const call = (toolCalls[fragment.index ?? toolCalls.length] ??= { id: '', name: '', arguments: '' });
+          if (fragment.id) call.id = fragment.id;
+          if (fragment.function?.name) call.name += fragment.function.name;
+          if (fragment.function?.arguments) call.arguments += fragment.function.arguments;
+        }
       }
     }
   } catch (error) {
@@ -680,7 +890,7 @@ async function* streamChatCompletion({ apiKey, model, messages, signal }) {
     reader.cancel().catch(() => {});
   }
   if (!sawDone && !finishReason) throw new LlmError('interrupted', 'The reply ended unexpectedly.');
-  yield { type: 'done', id, usage, finishReason };
+  yield { type: 'done', id, usage, finishReason, toolCalls: toolCalls.filter(Boolean) };
 }
 
 /** @param {Response} response @returns {Promise<LlmError>} */
@@ -706,6 +916,7 @@ async function errorFromResponse(response) {
 /**
  * Loads the profile on mount and whenever the window regains focus. A failed
  * refresh keeps the last good model and reports the error alongside it.
+ * `show` displays a profile parsed elsewhere (from an agent tool response).
  */
 function useProfile() {
   const [model, setModel] = useState(/** @type {ProfileModel | null} */ (null));
@@ -713,18 +924,22 @@ function useProfile() {
   const [loading, setLoading] = useState(true);
   const [loadedAt, setLoadedAt] = useState(/** @type {Date | null} */ (null));
 
+  const show = useCallback((next) => {
+    setModel(next);
+    setError(null);
+    setLoadedAt(new Date());
+  }, []);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      setModel(await fetchProfile());
-      setError(null);
-      setLoadedAt(new Date());
+      show(await fetchProfile());
     } catch (e) {
       setError(e);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [show]);
 
   useEffect(() => {
     refresh();
@@ -732,7 +947,7 @@ function useProfile() {
     return () => window.removeEventListener('focus', refresh);
   }, [refresh]);
 
-  return { model, error, loading, loadedAt, refresh };
+  return { model, error, loading, loadedAt, refresh, show };
 }
 
 /**
@@ -758,48 +973,117 @@ function useSettings() {
 }
 
 /**
+ * @typedef {{ type: 'text', text: string }
+ *   | { type: 'tool', id: string, name: string, method?: string, path?: string,
+ *       fields?: Record<string, string | string[]>, running: boolean,
+ *       status?: number, outcome?: string | null, error?: string }
+ *   | { type: 'note', text: string }} Part
  * @typedef {{ id: string, role: 'user', content: string }} UserMessage
- * @typedef {{ id: string, role: 'assistant', content: string,
+ * @typedef {{ id: string, role: 'assistant', parts: Part[], api: object[],
  *             status: 'streaming' | 'done' | 'stopped' | 'error', error?: LlmError }} AssistantMessage
  * @typedef {UserMessage | AssistantMessage} ChatMessage
  */
 
-/** The conversation, and sending, stopping and retrying replies. */
-function useChat({ apiKey, model }) {
+/**
+ * The conversation and the agent loop: stream a completion, run any tool
+ * calls it asks for, feed the results back, and repeat until the model
+ * replies without tools. `onProfile` receives every profile a tool returns,
+ * so the panel updates mid-turn.
+ */
+function useChat({ apiKey, model }, { onProfile }) {
   const [messages, setMessages] = useState(/** @type {ChatMessage[]} */ ([]));
   const [busy, setBusy] = useState(false);
   const controllerRef = useRef(/** @type {AbortController | null} */ (null));
 
   const updateMessage = (id, change) => setMessages((ms) => ms.map((m) => (m.id === id ? { ...m, ...change(m) } : m)));
+  const appendText = (id, text) =>
+    updateMessage(id, ({ parts }) => {
+      const last = parts.at(-1);
+      return last?.type === 'text'
+        ? { parts: [...parts.slice(0, -1), { ...last, text: last.text + text }] }
+        : { parts: [...parts, { type: 'text', text }] };
+    });
+  const addPart = (id, part) => updateMessage(id, ({ parts }) => ({ parts: [...parts, part] }));
+  const updatePart = (id, partId, change) =>
+    updateMessage(id, ({ parts }) => ({ parts: parts.map((p) => (p.type === 'tool' && p.id === partId ? { ...p, ...change } : p)) }));
 
-  /** Streams an assistant reply to `history`, which ends with a user message. */
+  /** Runs one assistant turn in reply to `history`, which ends with a user message. */
   const respond = async (history) => {
-    const reply = { id: crypto.randomUUID(), role: 'assistant', content: '', status: 'streaming' };
+    const reply = { id: crypto.randomUUID(), role: 'assistant', parts: [], api: [], status: 'streaming' };
     setMessages([...history, reply]);
     setBusy(true);
     const controller = new AbortController();
     controllerRef.current = controller;
-    const started = performance.now();
-    const log = (outcome, extra = {}) =>
-      logEvent({ event: 'llm.call', model, outcome, latencyMs: Math.round(performance.now() - started), ...extra });
+    const { signal } = controller;
 
     try {
-      const stream = streamChatCompletion({ apiKey, model, messages: toApiMessages(history), signal: controller.signal });
-      for await (const event of stream) {
-        if (event.type === 'text') updateMessage(reply.id, (m) => ({ content: m.content + event.text }));
-        if (event.type === 'done') {
-          updateMessage(reply.id, () => ({ status: 'done' }));
-          log('ok', { requestId: event.id, finishReason: event.finishReason, usage: event.usage });
+      let home;
+      try {
+        home = await agentRequest({ method: 'GET', path: '/', signal });
+      } catch (error) {
+        if (error instanceof BackendUnreachableError) throw new LlmError('service-unreachable', error.message);
+        throw error;
+      }
+      const conversation = [{ role: 'system', content: systemPrompt(home.main) }, ...toApiMessages(history)];
+      const turn = [];
+
+      for (let round = 1; ; round++) {
+        if (round > MAX_TOOL_ROUNDS) {
+          addPart(reply.id, { type: 'note', text: `Stopped after ${MAX_TOOL_ROUNDS} rounds of tool calls.` });
+          break;
+        }
+        const started = performance.now();
+        let text = '';
+        let toolCalls = [];
+        for await (const event of streamChatCompletion({ apiKey, model, messages: [...conversation, ...turn], tools: TOOLS, signal })) {
+          if (event.type === 'text') {
+            text += event.text;
+            appendText(reply.id, event.text);
+          }
+          if (event.type === 'done') {
+            toolCalls = event.toolCalls;
+            logEvent({
+              event: 'llm.call',
+              model,
+              round,
+              outcome: 'ok',
+              latencyMs: Math.round(performance.now() - started),
+              requestId: event.id,
+              finishReason: event.finishReason,
+              toolCalls: toolCalls.map((c) => c.name),
+              usage: event.usage,
+            });
+          }
+        }
+
+        turn.push({
+          role: 'assistant',
+          content: text,
+          ...(toolCalls.length > 0 && {
+            tool_calls: toolCalls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments || '{}' } })),
+          }),
+        });
+        if (toolCalls.length === 0) break;
+
+        for (const call of toolCalls) {
+          const partId = call.id || crypto.randomUUID();
+          const { error, ...request } = describeToolCall(call);
+          addPart(reply.id, { type: 'tool', id: partId, name: call.name, ...request, running: true });
+          const { content, result, profile } = await runToolCall(call, signal);
+          updatePart(reply.id, partId, { running: false, ...result });
+          if (profile) onProfile(profile);
+          turn.push({ role: 'tool', tool_call_id: call.id, content });
         }
       }
+      updateMessage(reply.id, () => ({ status: 'done', api: turn }));
     } catch (error) {
-      if (controller.signal.aborted) {
+      if (signal.aborted) {
         updateMessage(reply.id, () => ({ status: 'stopped' }));
-        log('stopped');
+        logEvent({ event: 'llm.turn', model, outcome: 'stopped' });
       } else {
         const llmError = error instanceof LlmError ? error : new LlmError('unavailable', 'Something went wrong.');
         updateMessage(reply.id, () => ({ status: 'error', error: llmError }));
-        log('error', { kind: llmError.kind, status: llmError.status, detail: llmError.detail ?? String(error) });
+        logEvent({ event: 'llm.turn', model, outcome: 'error', kind: llmError.kind, status: llmError.status, detail: llmError.detail ?? String(error) });
       }
     } finally {
       controllerRef.current = null;
@@ -812,7 +1096,7 @@ function useChat({ apiKey, model }) {
     respond([...messages, { id: crypto.randomUUID(), role: 'user', content: text }]);
   };
 
-  /** Re-requests the last reply if it failed. */
+  /** Re-runs the last turn if it failed. Profile writes are idempotent, so repeating them is safe. */
   const retry = () => {
     const last = messages.at(-1);
     if (busy || last?.role !== 'assistant' || last.status !== 'error') return;
@@ -825,14 +1109,19 @@ function useChat({ apiKey, model }) {
 }
 
 /**
- * What the model sees: user messages and replies the user actually received.
- * Failed replies are left out, so a retry starts clean.
+ * What the model sees of earlier turns. Completed turns are replayed in full,
+ * tool calls included, so the model keeps what it learned. A stopped turn
+ * contributes only the text the user saw; a failed one is left out, so a
+ * retry starts clean.
  * @param {ChatMessage[]} messages
  */
 function toApiMessages(messages) {
-  return messages
-    .filter((m) => m.role === 'user' || ((m.status === 'done' || m.status === 'stopped') && m.content))
-    .map(({ role, content }) => ({ role, content }));
+  return messages.flatMap((m) => {
+    if (m.role === 'user') return [{ role: 'user', content: m.content }];
+    if (m.status === 'done') return m.api;
+    const text = m.parts.filter((p) => p.type === 'text').map((p) => p.text).join('\n\n');
+    return m.status === 'stopped' && text ? [{ role: 'assistant', content: text }] : [];
+  });
 }
 
 // --- Components -------------------------------------------------------------
@@ -840,7 +1129,7 @@ function toApiMessages(messages) {
 function App() {
   const profile = useProfile();
   const [settings, saveSettings] = useSettings();
-  const chat = useChat(settings);
+  const chat = useChat(settings, { onProfile: profile.show });
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   return html`
@@ -924,19 +1213,60 @@ function Message({ message, isLast, onRetry, onOpenSettings }) {
   if (message.role === 'user') {
     return html`<div className="message user"><div className="bubble">${message.content}</div></div>`;
   }
-  const { content, status, error } = message;
+  const { parts, status, error } = message;
   const streaming = status === 'streaming';
+  const last = parts.at(-1);
+  // Show the typing dots whenever the model is working but nothing is visibly happening.
+  const waiting = streaming && (!last || (last.type === 'tool' && !last.running));
   return html`
     <div className="message assistant">
-      ${(content || streaming) &&
-      html`<div className=${`bubble${streaming && content ? ' caret' : ''}`}>
-        ${content || html`<span className="typing" aria-label="Assistant is typing"><span /><span /><span /></span>`}
-      </div>`}
+      ${parts.map((part, i) => {
+        if (part.type === 'tool') return html`<${ToolCall} key=${part.id} call=${part} />`;
+        if (part.type === 'note') return html`<div key=${i} className="message-note">${part.text}</div>`;
+        const caret = streaming && part === last;
+        return html`<div key=${i} className=${`bubble${caret ? ' caret' : ''}`}>${part.text}</div>`;
+      })}
+      ${waiting && html`<div className="bubble"><span className="typing" aria-label="Assistant is working"><span /><span /><span /></span></div>`}
       ${status === 'stopped' && html`<div className="message-note">Stopped</div>`}
       ${status === 'error' &&
-      html`<${MessageError} error=${error} partial=${Boolean(content)} canRetry=${isLast} onRetry=${onRetry} onOpenSettings=${onOpenSettings} />`}
+      html`<${MessageError}
+        error=${error}
+        partial=${parts.some((p) => p.type === 'text')}
+        canRetry=${isLast}
+        onRetry=${onRetry}
+        onOpenSettings=${onOpenSettings}
+      />`}
     </div>
   `;
+}
+
+/** One tool call, shown as the request it made and what came back. */
+function ToolCall({ call }) {
+  const tone = call.running ? 'running' : call.error ? 'error' : toneOf(call.status, call.outcome);
+  const result = call.running ? 'running…' : call.error ? 'error' : [call.status, call.outcome].filter(Boolean).join(' ');
+  return html`
+    <div className=${`tool-call ${tone}`} title=${call.error ?? ''}>
+      <span className="tool-name">${call.name}</span>
+      ${call.path && html`<span className="tool-target">${call.method} ${call.path}</span>`}
+      ${call.fields && html`<span className="tool-fields">${formatFields(call.fields)}</span>`}
+      <span className="tool-result">${result}</span>
+    </div>
+  `;
+}
+
+/** @param {number | undefined} status @param {string | null | undefined} outcome */
+function toneOf(status, outcome) {
+  if (outcome === 'conflict' || outcome === 'reported' || outcome === 'not-found') return 'warn';
+  if (!status || status >= 400) return 'error';
+  return outcome === 'unchanged' ? 'neutral' : 'ok';
+}
+
+/** @param {Record<string, string | string[]>} fields */
+function formatFields(fields) {
+  const clip = (v) => (v.length > 48 ? `${v.slice(0, 47)}…` : v);
+  return Object.entries(fields)
+    .map(([name, value]) => `${name}=${[value].flat().map((v) => JSON.stringify(clip(String(v)))).join(',')}`)
+    .join(' ');
 }
 
 function MessageError({ error, partial, canRetry, onRetry, onOpenSettings }) {
@@ -944,6 +1274,7 @@ function MessageError({ error, partial, canRetry, onRetry, onOpenSettings }) {
   return html`
     <div className="message-error" role="alert">
       <strong>${error.message}</strong>
+      ${error.kind === 'service-unreachable' && html`<div className="detail">Start it with npm start in the project folder, then retry.</div>`}
       ${error.detail && html`<div className="detail">${error.detail}</div>`}
       ${partial && html`<div className="detail">The text above is incomplete.</div>`}
       <div className="actions">

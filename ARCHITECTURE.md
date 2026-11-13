@@ -192,29 +192,35 @@ One file, `frontend/index.html`, with these internal sections:
 
 ### 5.2 Tools exposed to the LLM
 
-| Tool | Backend call |
-|---|---|
-| `getDestinationInfo(name)` | `GET /destinations?name=…` |
-| `updateProfile(field, op, value, evidence)` | `POST /profile` |
-| `reportConflict(field, newInformation, evidence)` | `POST /profile/conflicts` |
-| `resolveConflict(id, resolution, value?)` | `POST /profile/conflicts/{id}` |
+The model gets two generic tools. It uses the service the way a person uses it in a browser:
 
-Each tool result is the HTTP status line plus the `<main>` HTML. The model can therefore tell "not found" (404), "conflict" (409) and "invalid" (422) apart.
+| Tool | What it does |
+|---|---|
+| `getPage(path)` | `GET` a page: read the profile, follow links, look up a destination (`/destinations?name=Lisbon`). A `method="get"` form becomes a query string. |
+| `submitForm(action, fields)` | `POST` a form's fields to its `action`. An array value becomes a repeated input. |
+
+- **The HTML says what is possible.** The links and forms on each page tell the model what it can do, so the frontend holds no knowledge of profiles, conflicts or destinations. Backend capabilities can change without touching the tool definitions.
+- **Arguments are paths, never URLs.** The frontend resolves them against `BACKEND_URL` and refuses anything that would leave the service (absolute URLs, `//host`, backslash tricks) before any request is made.
+- **Each call carries `X-Client: agent`**, so the backend applies agent policy (§3.3).
+- **Tool results** are `HTTP {status}` plus the response's `<main>` HTML. The model can tell found, conflict, not-found and invalid apart from the status and `#result[data-outcome]`. Bad arguments and network failures come back as `Error: …` text the model can act on.
+- **`getDestinationInfo`.** The assignment's function is not a tool name. Every `GET /destinations?name=…` calls `getDestinationInfo()` in the backend, and each lookup shows in the chat and the logs.
 
 ### 5.3 A conversation turn
 
 1. The user sends a message. The input is disabled until the turn ends (CHAT-6).
-2. The frontend fetches `GET /profile` and puts that HTML in the system prompt, along with the interviewing rules (D2), the destination rule (always call `getDestinationInfo` for a named place and use only its result), and the conflict rule.
-3. It streams a completion from OpenRouter, rendering text tokens as they arrive (CHAT-3).
-4. When the model calls tools, the frontend runs each one against the backend, **updates React state from the parsed response** (so the panel changes mid-turn, VIEW-5), and adds the HTML to the conversation as the tool result. Then it streams the next completion. There are at most 5 tool rounds per turn.
+2. The frontend fetches the home page (`GET /`) as the agent. The system prompt is a short preamble plus that page's `<main>` HTML. The home page carries **all the rules**: interview style, how to use the service, recording only stated preferences with evidence, conflict handling and destination lookups (`backend/guide.js`). Behavior is defined in one place, and anyone can read it in a browser.
+3. It streams a completion from OpenRouter, rendering text tokens as they arrive (CHAT-3). Tool calls arrive in fragments and are assembled.
+4. If the model called tools, each one runs against the backend in order. It is listed in the chat with its method, path, fields and result. Any response containing `#profile` is parsed and **pushed to the panel immediately** (VIEW-5). The results go back to the model and the next completion streams. There are at most 8 rounds per turn.
 5. The turn ends when a completion finishes with no tool calls.
+
+Later turns replay earlier completed turns in full, tool calls and results included, so the model keeps what it learned (UC-19). A stopped turn contributes only its visible text, and a failed turn is left out. Retrying a failed turn repeats its writes, which is safe because the backend treats a repeated add as unchanged and returns the existing conflict for a repeated contradiction.
 
 ### 5.4 Frontend state
 
 | State | Where |
 |---|---|
 | API key and model | `localStorage`, entered in the settings form. Never sent anywhere except OpenRouter. |
-| Chat transcript | `localStorage`, so the conversation survives a reload. A "New conversation" action clears it. |
+| Chat transcript | In memory only for now. A reload starts a new conversation; the profile itself persists in the backend. |
 | Profile and conflicts | Not stored. Always re-read from the backend. |
 
 ## 6. Failure handling
