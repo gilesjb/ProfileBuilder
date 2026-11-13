@@ -79,7 +79,7 @@ The following are explicitly not required:
 
 ## 8. Open decisions
 
-The assignment leaves these to the implementer. They will be recorded as design decisions:
+The assignment leaves these to the implementer. They are resolved in [DECISIONS.md](DECISIONS.md):
 
 - Which fields make up the travel profile, and why.
 - How proactive the assistant is: interviewing the user, or drafting a profile and asking for corrections.
