@@ -205,14 +205,29 @@ These use cases define how Profile Builder is verified against [REQUIREMENTS.md]
 **Setup:** Transport preference = flying.
 **Steps:** Send "Actually, scratch that, I prefer trains."
 **Expected:**
-- Transport preference becomes trains and no conflict is flagged.
-- If the app raises a conflict instead, that is acceptable. Silently keeping "flying" is a failure.
+- Transport preference becomes trains (flying is removed) and no conflict is flagged. The user stated the change, so nothing needs confirming.
+- Silently keeping "flying" is a failure.
+
+### UC-28 Clear everything on request
+**Covers:** PROF-5, CONF-6
+**Setup:** Several fields filled in.
+**Steps:** Send "Please clear all my preferences."
+**Expected:**
+- Every value is removed and no conflicts are created. A request is not a contradiction.
+- Open conflicts about the removed values are closed.
+- The assistant does not reset the profile wholesale: that is refused for the agent (see UC-36).
+
+### UC-29 Single-value update ★
+**Covers:** PROF-5, CONF-1 (false positive)
+**Setup:** Home base = Boston.
+**Steps:** Send "We just moved to Chicago."
+**Expected:** Home base becomes Chicago with no conflict. A move is an update, not a contradiction.
 
 ---
 
 ## F. Errors & robustness
 
-### UC-28 Model unavailable or misconfigured
+### UC-30 Model unavailable or misconfigured
 **Covers:** CHAT-7
 **Setup:** The model credentials are missing or invalid, or the provider cannot be reached.
 **Steps:** Send a message.
@@ -222,7 +237,7 @@ These use cases define how Profile Builder is verified against [REQUIREMENTS.md]
 - The profile is unchanged.
 - The user can try again once the problem is fixed.
 
-### UC-29 Reply fails partway through
+### UC-31 Reply fails partway through
 **Covers:** CHAT-7, PROF-4
 **Setup:** The stream breaks after some text has arrived.
 **Steps:** Send a message.
@@ -231,13 +246,39 @@ These use cases define how Profile Builder is verified against [REQUIREMENTS.md]
 - The input can be used again.
 - The stored profile is not corrupted and is not left half-updated.
 
-### UC-30 Malformed extraction output ★
+### UC-32 Malformed extraction output ★
 **Covers:** PROF-4
 **Setup:** The model is stubbed to return extraction output that is malformed or fails validation.
 **Steps:** Send a message.
 **Expected:**
 - The invalid data is thrown away and the existing profile stays as it was.
 - The conversation keeps working.
+
+### UC-33 Agent tool calls are visible while it works
+**Covers:** DEST-1 (observability)
+**Steps:** Send a message that mentions a destination and a preference.
+**Expected:**
+- While the agent works, the chat lists each tool call (getPage / submitForm with path, fields and result), including the /destinations lookup.
+- The rows fade out once the reply is complete. After an error or Stop they stay.
+- Every call is logged as JSON in the browser console.
+
+### UC-34 Off-site paths are refused ★
+**Covers:** security
+**Setup:** The model is stubbed to call getPage with an absolute URL (e.g. https://evil.example/).
+**Expected:** No request leaves the browser. The model receives an error saying the path must be on the profile service.
+
+### UC-35 Profile service not running
+**Covers:** CHAT-7
+**Setup:** Stop the backend.
+**Steps:** Send a message; reload the page.
+**Expected:**
+- The chat says it can't reach the profile service and how to start it, with Retry.
+- The panel says the same and keeps the last profile that loaded.
+
+### UC-36 The agent cannot reset the profile ★
+**Covers:** PERS-1
+**Steps:** POST /profile/reset with X-Client: agent.
+**Expected:** 403 with outcome forbidden, the profile unchanged, and the reset form left out of pages served to the agent.
 
 ---
 
@@ -249,29 +290,29 @@ These use cases define how Profile Builder is verified against [REQUIREMENTS.md]
 | CHAT-2–4 | UC-02 |
 | CHAT-5 | UC-04 |
 | CHAT-6 | UC-02 |
-| CHAT-7 | UC-28, UC-29 |
+| CHAT-7 | UC-30, UC-31, UC-35 |
 | PROF-1 | UC-05–07, UC-10 |
 | PROF-2 | UC-05–07, UC-09 |
 | PROF-3 | UC-08 |
-| PROF-4 | UC-29, UC-30 |
-| PROF-5 | UC-27 |
+| PROF-4 | UC-31, UC-32 |
+| PROF-5 | UC-27–29 |
 | VIEW-1 | UC-01 |
 | VIEW-2 | UC-05–07 |
 | VIEW-3 | UC-01 |
 | VIEW-4 | UC-05 |
 | VIEW-5 | UC-11 |
 | VIEW-6 | UC-12 |
-| PERS-1 | UC-13 |
+| PERS-1 | UC-13, UC-36 |
 | PERS-2 | UC-14 |
 | PERS-3 | UC-26 |
-| DEST-1 | UC-15, UC-17, UC-18 |
+| DEST-1 | UC-15, UC-17, UC-18, UC-33 |
 | DEST-2 | UC-15 |
 | DEST-3 | UC-20 |
 | DEST-4 | UC-15, UC-19 |
 | DEST-5 | UC-16, UC-17 |
 | DEST-6 | UC-15, UC-16 |
-| CONF-1 | UC-10, UC-21 |
+| CONF-1 | UC-10, UC-21, UC-29 |
 | CONF-2 | UC-21 |
 | CONF-3 | UC-21, UC-25 |
 | CONF-4–5 | UC-22–24 |
-| CONF-6 | UC-27 |
+| CONF-6 | UC-27, UC-28 |

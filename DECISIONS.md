@@ -39,3 +39,5 @@ When new input contradicts an existing field:
 6. Unresolved conflicts persist across reloads (PERS-3).
 
 **Rationale:** resolving through the conversation keeps the profile view read-only (VIEW-6), and it allows nuanced answers that Keep/Replace buttons can't express. The panel flag means a conflict can't slip by unnoticed if the user ignores the question in chat.
+
+**What counts as a conflict** (refined during implementation): a conflict is something the user said that contradicts a stored value *without* the user saying that value is wrong, for example a steakhouse when the profile says vegetarian. When the user explicitly changes or retracts a preference ("I moved to Chicago", "remove my dogs", "clear my preferences"), that is the user deciding, and it is applied directly. Only the LLM can tell the two apart, so the assistant detects conflicts and the backend records and tracks them. See [ARCHITECTURE.md §3.4](ARCHITECTURE.md#34-conflicts-profilejs).
