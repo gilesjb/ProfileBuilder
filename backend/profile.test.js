@@ -55,10 +55,29 @@ describe('applyChange', () => {
     assert.equal(state.conflicts[0].proposed?.value, 'Chicago');
   });
 
-  it('records a conflict instead of removing a stored value', () => {
-    const { state, outcome } = apply(vegetarian(), { field: 'dietaryRestrictions', op: 'remove', value: 'vegetarian' });
-    assert.equal(outcome.kind, 'conflict');
-    assert.deepEqual(state.profile.dietaryRestrictions.map((v) => v.value), ['vegetarian']);
+  it('removes a stored value without recording a conflict', () => {
+    const start = apply(vegetarian(), { field: 'dietaryRestrictions', op: 'add', value: 'gluten-free' }).state;
+    const { state, outcome } = apply(start, { field: 'dietaryRestrictions', op: 'remove', value: 'Vegetarian' });
+    assert.equal(outcome.kind, 'applied');
+    assert.equal(state.conflicts.length, 0);
+    assert.deepEqual(state.profile.dietaryRestrictions.map((v) => v.value), ['gluten-free']);
+  });
+
+  it('closes conflicts that depended on a removed value, and only those', () => {
+    const withConflict = reportConflict(
+      apply(vegetarian(), { field: 'interests', op: 'add', value: 'hiking' }).state,
+      { field: 'dietaryRestrictions', newInformation: 'wants a steakhouse', evidence: 'steak!' },
+      now,
+    ).state;
+    const twoConflicts = reportConflict(
+      withConflict,
+      { field: 'interests', newInformation: 'hates walking', evidence: 'I hate walking' },
+      now,
+    ).state;
+    const { state, outcome } = apply(twoConflicts, { field: 'dietaryRestrictions', op: 'remove', value: 'vegetarian' });
+    assert.equal(outcome.kind, 'applied');
+    assert.match(outcome.message, /Closed conflict c1/);
+    assert.deepEqual(state.conflicts.map((c) => c.id), ['c2']);
   });
 
   it('does nothing when removing a value that is not stored', () => {

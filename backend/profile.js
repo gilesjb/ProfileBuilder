@@ -49,8 +49,10 @@ export function emptyState() {
 
 /**
  * Applies a change, or records a conflict if it would contradict a stored
- * value. Adding to a list never conflicts; replacing or removing a stored
- * value always does (CONF-2).
+ * value. Adding to a list never conflicts, and neither does removing a value:
+ * a removal is the user retracting a preference, not new information
+ * contradicting it. Replacing a stored single value with a different one
+ * always conflicts (CONF-2).
  * @param {State} state
  * @param {ProfileChange} change
  * @param {Date} now
@@ -82,7 +84,12 @@ export function applyChange(state, change, now) {
 
   // op === 'remove'
   if (!isStored) return unchanged(state, `${label} does not include "${value}"; nothing to remove.`);
-  return recordConflict(state, field, `remove "${value}"`, change.evidence, change, now);
+  const removed = withField(state, field, current.filter((v) => !sameText(v.value, value)));
+  // Conflicts about the removed value have nothing left to contradict.
+  const moot = removed.conflicts.filter((c) => c.field === field && c.existing.some((e) => sameText(e, value)));
+  const next = { ...removed, conflicts: removed.conflicts.filter((c) => !moot.includes(c)) };
+  const closed = moot.length ? ` Closed conflict${moot.length > 1 ? 's' : ''} ${moot.map((c) => c.id).join(', ')}, which depended on it.` : '';
+  return { state: next, outcome: { kind: 'applied', message: `Removed "${value}" from ${label}.${closed}` } };
 }
 
 /**

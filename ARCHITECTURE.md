@@ -101,7 +101,8 @@ Conflict handling lives in one module and has two detection paths that feed a si
 1. **Structural (deterministic, in the backend).**
    - `add` to a list: applied. Adding is never a conflict (UC-10).
    - `set` on an empty single-value field: applied.
-   - `set` that differs from the stored value, or `remove` of a stored value: **not applied**. A conflict is recorded holding the existing value, the proposed change and the evidence. Response: 409.
+   - `remove` of a stored value: applied. A removal is the user retracting a preference, not new information contradicting it. Treating removals as conflicts made "clear my preferences" produce one conflict per value. Open conflicts that depended on the removed value are closed, since nothing is left to contradict.
+   - `set` that differs from the stored value: **not applied**. A conflict is recorded holding the existing value, the proposed change and the evidence. Response: 409.
    - Repeating a change that is already an open conflict returns that conflict rather than creating a duplicate.
 2. **Semantic (LLM-reported).** The backend can't know that "steakhouse" contradicts "vegetarian". The LLM reports that kind of contradiction through `POST /profile/conflicts`. It is stored and shown exactly like a structural conflict, but has no proposed change. Reporting a conflict against an empty field is rejected (422), since nothing is contradicted.
 
@@ -111,7 +112,7 @@ Resolution:
 - `replace` sets the field to the submitted value(s), possibly none, and closes the conflict.
 - A clarification ("the steakhouse is for my partner") becomes `keep` plus a separate `add` to another field.
 
-Explicit corrections (CONF-6) are **not** a shortcut. They go through the conflict path and get resolved on the user's next message. UC-27 explicitly allows this.
+Explicit corrections (CONF-6) are handled for list fields: "actually I prefer trains" becomes a `remove` and an `add`, with no conflict. For single-value fields they still go through the conflict path, which UC-27 allows. The guide tells the agent to remove values only when the user explicitly retracts them. A mere hint (the steakhouse) is reported as a conflict instead.
 
 ### 3.5 Persistence (`store.js`)
 

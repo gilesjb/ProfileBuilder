@@ -41,8 +41,9 @@ export const GUIDE = [
   {
     title: 'Contradictions',
     rules: [
-      'Never overwrite or remove a stored value on your own judgment. When the user says something that contradicts a stored value, submit the change anyway: the service will record a conflict and leave the value unchanged.',
-      'If the contradiction is not a direct change to a value (for example a steakhouse when the profile says vegetarian), submit the report-conflict form instead.',
+      'When the user explicitly says a stored preference no longer applies, or asks you to remove it, remove it with the update-profile form. Removals are applied directly. Never remove a value on your own judgment.',
+      'When the user gives a different value for a single-value field, submit the change anyway: the service will record a conflict and leave the stored value unchanged.',
+      'When something the user says suggests a stored value may be wrong, without saying so (for example a steakhouse when the profile says vegetarian), submit the report-conflict form. Don\'t remove the value.',
       "When a conflict is recorded (outcome conflict or reported), tell the user plainly what contradicts what and ask which is right. Don't resolve it until they answer.",
       'When they answer, resolve the conflict with its form: keep (the stored value stands), accept (apply the proposed change) or replace (set the field to the values given). If the answer is a clarification, such as "the steakhouse is for my partner", resolve with keep and then record the new information in the right field.',
       'Open conflicts stay listed on /profile. If one is still open, bring it up again at a natural moment.',
